@@ -1,0 +1,4 @@
+torch>=2.1
+# Optional: only needed for HFBackend (real backbone LLM). The core library,
+# MockBackend, and unit tests run on torch alone.
+transformers>=4.40

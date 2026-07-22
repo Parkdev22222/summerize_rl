@@ -1,0 +1,106 @@
+"""Weight-generating policy network (Section 2.2 of the work plan).
+
+The ONLY trainable component. Given per-branch hidden states at decoding step t,
+it emits the four PMI combination weights [a, b, c, d] with the plan's
+constraints:
+
+    a in (0, 1)          -- prior-removal strength     (sigmoid)
+    b + c + d = 1        -- source/core/term balance    (softmax)
+
+Kept in fp32 for numerical stability even when the LLM runs in bf16.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import torch
+import torch.nn as nn
+
+from .config import PolicyConfig
+
+
+@dataclass
+class BranchHidden:
+    """Last-layer hidden states of the four branches at one decoding step.
+
+    Each tensor has shape [batch, llm_hidden_size].
+    """
+
+    h_xq: torch.Tensor
+    h_sq: torch.Tensor
+    h_gq: torch.Tensor
+    h_q: torch.Tensor
+
+    def as_features(self, use_contrast: bool) -> torch.Tensor:
+        """Build the policy input feature vector x_t.
+
+        Base: [h_XQ ; h_SQ ; h_GQ ; h_Q]
+        Contrast (optional): + [h_XQ - h_Q ; h_SQ - h_Q ; h_GQ - h_Q]
+        """
+        parts = [self.h_xq, self.h_sq, self.h_gq, self.h_q]
+        if use_contrast:
+            parts += [
+                self.h_xq - self.h_q,
+                self.h_sq - self.h_q,
+                self.h_gq - self.h_q,
+            ]
+        return torch.cat(parts, dim=-1)
+
+
+@dataclass
+class Weights:
+    """PMI combination weights. Each tensor has shape [batch]."""
+
+    a: torch.Tensor
+    b: torch.Tensor
+    c: torch.Tensor
+    d: torch.Tensor
+
+
+class WeightPolicy(nn.Module):
+    """MLP mapping branch features -> [a, b, c, d] with plan constraints."""
+
+    def __init__(self, config: PolicyConfig):
+        super().__init__()
+        self.config = config
+        f, h = config.input_dim, config.hidden_dim
+
+        self.norm = nn.LayerNorm(f)
+        self.net = nn.Sequential(
+            nn.Linear(f, h),
+            nn.GELU(),
+            nn.Dropout(config.dropout),
+            nn.Linear(h, h),
+            nn.GELU(),
+            nn.Dropout(config.dropout),
+        )
+        self.head = nn.Linear(h, 4)  # raw = [u_a, u_b, u_c, u_d]
+
+        self._init_weights()
+        self.float()  # policy stays in fp32
+
+    def _init_weights(self) -> None:
+        """Warm-start: small last-layer weights, zero bias.
+
+        With zero bias the head outputs ~0, giving a = sigmoid(0) = 0.5 and
+        b = c = d = softmax(0,0,0) = 1/3, i.e. a neutral SARA-like start.
+        """
+        nn.init.normal_(self.head.weight, mean=0.0, std=self.config.init_std)
+        nn.init.zeros_(self.head.bias)
+
+    def forward(self, features: torch.Tensor) -> Weights:
+        """features: [batch, input_dim] -> Weights (each [batch])."""
+        features = features.float()
+        raw = self.head(self.net(self.norm(features)))  # [batch, 4]
+        a = torch.sigmoid(raw[..., 0])  # (0, 1)
+        bcd = torch.softmax(raw[..., 1:], dim=-1)  # sums to 1
+        return Weights(a=a, b=bcd[..., 0], c=bcd[..., 1], d=bcd[..., 2])
+
+    def entropy(self, weights: Weights) -> torch.Tensor:
+        """Entropy of the [b, c, d] categorical distribution, per batch item.
+
+        Used as an optional exploration bonus (Section 2.5.5 / 2.5.8).
+        """
+        p = torch.stack([weights.b, weights.c, weights.d], dim=-1)
+        return -(p * torch.log(p.clamp_min(1e-12))).sum(dim=-1)
