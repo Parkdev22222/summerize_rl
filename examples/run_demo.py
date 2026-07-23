@@ -50,7 +50,7 @@ def build_trainer(seed: int) -> SCSTTrainer:
     cfg.policy = PolicyConfig(llm_hidden_size=32, hidden_dim=64)
     cfg.decode = DecodeConfig(max_new_tokens=24, min_new_tokens=6, eos_token_id=1)
     cfg.train = TrainConfig(
-        num_samples=5, total_steps=20, grad_accum_steps=1, lr=5e-4, seed=seed
+        num_samples=5, total_steps=20, grad_accum_steps=1, lr=2e-3, seed=seed
     )
 
     backend = MockBackend(

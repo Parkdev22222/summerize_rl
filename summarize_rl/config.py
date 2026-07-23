@@ -66,7 +66,7 @@ class TrainConfig:
     """SCST training loop (Section 2.5.8, Section 5)."""
 
     num_samples: int = 5  # N rollouts per input for self-critical baseline
-    lr: float = 3e-5
+    lr: float = 3e-4  # policy is a small MLP; a too-small lr leaves weights frozen
     betas: tuple[float, float] = (0.9, 0.999)
     eps: float = 1e-8
     weight_decay: float = 0.01
