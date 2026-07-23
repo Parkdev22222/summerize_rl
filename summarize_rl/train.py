@@ -7,8 +7,14 @@ detached inside the decoder, so gradients cannot reach it. The loop:
   2. reference-free reward per rollout.
   3. self-critical baseline b (mean of the N rewards, or greedy reward).
   4. advantage A_i = R~_i - b.
-  5. loss = -(1/N) sum_i A_i * mean_t(logpi_t)   (- beta * entropy).
+  5. loss = -(1/N) sum_i A_i * (Lref/Li) * sum_t(logpi_t)   (- beta * entropy).
   6. AdamW step with grad clipping and accumulation.
+
+Length handling (step 5): each rollout's sequence log-prob is scaled by
+(group-mean length / its own length) rather than divided by its own length.
+This down-weights over-long rollouts (the point of length normalization)
+without collapsing the overall gradient magnitude by ~L, which previously
+pushed the grad norm far below grad_clip and left the policy weights frozen.
 """
 
 from __future__ import annotations
@@ -183,12 +189,19 @@ class SCSTTrainer:
 
         advantages = [r - baseline for r in rewards]
 
+        # Group-relative length normalization: scale each rollout's sequence
+        # log-prob by (mean_len / its_len) instead of dividing by its own
+        # length. This keeps over-long rollouts from dominating (the goal of
+        # length normalization) while holding the overall gradient magnitude at
+        # the ~sum_logp scale, so grad_clip still binds and the policy actually
+        # moves. Dividing by each rollout's own length shrank the gradient by
+        # ~L (~24x here), dropping it below grad_clip and freezing the weights.
+        lengths = [max(r.length, 1) for r in rollouts]
+        ref_len = sum(lengths) / len(lengths)
         loss = torch.zeros((), dtype=torch.float32)
-        for adv, rollout in zip(advantages, rollouts):
-            # Length-normalize the sequence log-probability so longer
-            # rollouts do not produce disproportionately large loss values.
-            mean_logp = rollout.sum_logp() / max(rollout.length, 1)
-            loss = loss - adv * mean_logp
+        for adv, rollout, length in zip(advantages, rollouts, lengths):
+            norm_logp = rollout.sum_logp() * (ref_len / length)
+            loss = loss - adv * norm_logp
         loss = loss / len(rollouts)
 
         entropy = torch.stack([r.mean_entropy() for r in rollouts]).mean()
