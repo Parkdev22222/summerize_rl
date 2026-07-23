@@ -1,0 +1,35 @@
+[project]
+name = "summarize-rl"
+version = "0.1.0"
+description = "PMI-weight RL for military-domain summarization: learn only the PMI combination weights [a,b,c,d] on a frozen LLM via reference-free SCST."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "torch>=2.1",
+]
+
+[project.optional-dependencies]
+# Real backbone LLM (HFBackend). Not needed for the core library, MockBackend,
+# or the unit tests.
+hf = [
+    "transformers>=4.40",
+]
+
+[dependency-groups]
+# Installed by default with `uv sync` (dev tooling for tests).
+dev = [
+    "pytest>=7",
+    "numpy",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["summarize_rl"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

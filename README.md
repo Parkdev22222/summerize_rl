@@ -22,6 +22,24 @@ logit_c = (1 + a) · (b·logit_XQ + c·logit_SQ + d·logit_GQ) − a·logit_Q
 
 ## 설치
 
+### uv (권장)
+
+```bash
+uv sync                      # 가상환경(.venv) 생성 + 핵심 deps(torch) + dev(pytest,numpy)
+uv sync --extra hf           # 실제 백본(HFBackend, transformers) 사용 시 추가
+```
+
+이후 모든 명령은 `uv run` 앞에 붙여 실행한다 (venv 자동 활성화):
+
+```bash
+uv run python -m examples.run_demo --steps 20
+uv run pytest
+```
+
+의존성은 `pyproject.toml`에 선언되어 있고 `uv.lock`으로 고정된다.
+
+### pip (대안)
+
 ```bash
 pip install torch            # 핵심 라이브러리 + MockBackend + 테스트
 pip install transformers     # 실제 백본(HFBackend) 사용 시에만
@@ -75,6 +93,58 @@ for step in range(cfg.train.total_steps):
 
 보상의 `Faithfulness`는 기본적으로 lexical fallback을 쓰며, NLI/FactKB 모델을
 `FaithfulnessModel` 인터페이스로 주입해 교체할 수 있다.
+
+## 실제 학습 실행 (단일 GPU, CLI)
+
+`examples/train_real.py`가 frozen `HFBackend` + triplet 코퍼스(JSONL) + `SCSTTrainer`를
+CLI로 묶는다. 정책망(fp32)과 샘플링 generator를 백본과 같은 device로 올려 GPU 실행 시
+device 불일치가 없다. 7~13B bf16 백본은 H100 80GB **한 장**에 올라간다.
+
+```bash
+uv sync --extra hf                          # transformers 포함
+CUDA_VISIBLE_DEVICES=0 uv run python -m examples.train_real \
+    --model <korean-7B-model> --dtype bfloat16 \
+    --data data/scenarios_ko.jsonl \
+    --steps 2000 --num-samples 5 --grad-accum 4 --ckpt-dir checkpoints
+```
+
+스모크 테스트: `--limit 4 --steps 5` 를 덧붙인다. 코퍼스는 `data/build_dataset.py`가
+`data/parts/*.jsonl`(원문 한국어 번역 + triplet)을 병합해 `data/scenarios_ko.jsonl`로
+만든다. 라이브러리는 모델 샤딩/데이터 병렬 롤아웃을 구현하지 않으므로 두 번째 H100은
+현재 활용되지 않는다(더 큰 백본 샤딩은 `HFBackend`에 `device_map` 지원 추가 필요).
+
+## 학습된 가중치로 요약 (추론 REPL)
+
+학습이 `checkpoints/`에 저장한 정책망 가중치(`best.pt` 등)를 **붙여서** 요약을 낸다.
+LLM은 frozen, 학습된 소형 정책망만 로드해 **greedy** PMI 디코딩한다. `--ckpt` 기본값은
+`checkpoints/best.pt`.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 uv run python -m examples.summarize \
+    --model <korean-7B-model> --dtype bfloat16 \
+    --ckpt checkpoints/best.pt
+```
+
+원문을 붙여넣고 **빈 줄**로 입력을 끝내면 요약이 나온다. "쿼리"는 요약 **지시문**(`--query`,
+기본 "…군사 표준용어를 사용하여 요약하시오.")이며 REPL에서 바꿀 수 있다.
+
+| REPL 명령어 | 동작 |
+|---|---|
+| *(원문 + 빈 줄)* | 요약 출력 (+ 활성 표준용어, 평균 가중치 `[a,b,c,d]`) |
+| `:query <지시문>` | 요약 지시문 변경 |
+| `:ckpt <경로>` | 다른 체크포인트 즉시 재로드 |
+| `:help` | 도움말 |
+| `:q` / `:quit` / `:exit` | 종료 |
+
+프로그램에서 재사용하려면 `summarize_rl.infer.Summarizer`를 직접 쓴다 (백본 비의존):
+
+```python
+from summarize_rl.infer import Summarizer
+s = Summarizer(backend, policy, cfg, glossary=glossary)
+s.load_checkpoint("checkpoints/best.pt")
+result = s.summarize("적 부대가 이동 중이며 고지를 점령했다.")
+print(result.text, result.active_terms, result.mean_weights)
+```
 
 ## 설계상 보장
 
