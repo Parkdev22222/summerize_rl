@@ -86,3 +86,46 @@ CLI는 HFBackend 기본이지만 `Summarizer`가 백본 비의존이라 `MockBac
 
 - REPL에서 트리플릿 입력(코어는 인자로 받되 REPL은 원문만). 배치. 샘플링(greedy만).
 - 모델 샤딩/멀티 GPU.
+
+---
+
+# 추가: 상주 서버 + 대화형 클라이언트 (2026-07-23)
+
+## 왜 vLLM이 아닌가
+
+요약은 **4갈래 PMI 정책망 디코딩**이라 매 스텝 (1) 4브랜치의 다음 토큰 logits 전체,
+(2) 4브랜치의 마지막 hidden state(→정책망 입력), (3) 4갈래 대조 결합이 필요하다. 표준
+vLLM(OpenAI 호환)은 (1)(2)를 외부로 내주지 않고 이 공유-토큰 4캐시 루프를 실행할 수단도
+없다. 그래서 vLLM에 백본을 올려도 **학습된 정책망 가중치가 적용된 요약은 나오지 않는다**.
+→ vLLM 대신 우리 `Summarizer`를 감싼 경량 HTTP 서버로 모델을 상주시킨다.
+
+## 구성
+
+### 4. `examples/serve.py` — 상주 HTTP 서버
+
+- `build_hf_summarizer`(→ `summarize_rl/infer.py`, REPL과 공유)로 GPU 1장에 백본+정책망
+  상주. `SummarizerService`가 `summarize`/`reload`를 **락으로 직렬화**(GPU 1장, 모델 1개).
+- stdlib `http.server`(추가 의존성 없음). 엔드포인트:
+  - `GET /health` → `{"status":"ok"}`
+  - `POST /summarize` `{source, query?}` → `{text, active_terms, mean_weights, query}`
+  - `POST /reload` `{ckpt}` → `{ckpt, step}`
+- `SummarizerService`는 HTTP와 분리 → MockBackend로 단위 테스트.
+
+### 5. `examples/summarize_client.py` — 터미널 REPL 클라이언트
+
+- 모델을 갖지 않는 얇은 클라이언트. `urllib`(stdlib)로 서버에 POST, **답만 출력**.
+- REPL UX는 `examples/summarize.py`의 `read_source`/`print_summary` 재사용.
+  `:query`(클라이언트측), `:ckpt`(서버 `/reload` 호출), `:help`, `:q`.
+- 시작 시 `/health`로 연결 확인.
+
+### 6. `tests/test_serve.py` — `SummarizerService` 단위 테스트
+
+필수 필드/에러(빈 source), query 오버라이드, `reload` 정상/미존재 파일, JSON 직렬화.
+
+## GPU 1장 고정
+
+서버를 `CUDA_VISIBLE_DEVICES=<N>`로 띄우면 그 카드에만 상주한다(코드 변경 불필요).
+
+## 범위 밖
+
+- 진짜 vLLM 통합(정책망 미적용이라 목적에 부적합). 인증/동시성 확장/스트리밍. 배치.

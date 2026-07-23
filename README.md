@@ -146,6 +146,29 @@ result = s.summarize("적 부대가 이동 중이며 고지를 점령했다.")
 print(result.text, result.active_terms, result.mean_weights)
 ```
 
+## 상주 서버 + 대화형 클라이언트 (답만 확인)
+
+무거운 백본을 매번 로드하지 않고, **GPU 1장에 상주시킨 서버**에 대화형 클라이언트로
+질의해 **답(요약)만 확인**한다. `CUDA_VISIBLE_DEVICES`로 카드 1장 고정.
+
+```bash
+# 1) 서버: GPU 3번에 백본+체크포인트 상주
+CUDA_VISIBLE_DEVICES=3 uv run python -m examples.serve \
+    --model <korean-7B-model> --dtype bfloat16 \
+    --ckpt checkpoints/best.pt --host 127.0.0.1 --port 8000
+
+# 2) 클라이언트: 터미널 REPL (모델 없음, 서버에 POST만)
+uv run python -m examples.summarize_client --server http://127.0.0.1:8000
+```
+
+> **왜 vLLM이 아닌가:** 이 요약은 4갈래 PMI *정책망* 디코딩이라 매 스텝 4브랜치의 logits
+> 전체 + hidden state + 대조 결합이 필요하다. 표준 vLLM은 이를 노출하지 않아, 올려도
+> **학습된 가중치가 적용된 요약이 나오지 않는다.** 그래서 `Summarizer`를 감싼 경량 HTTP
+> 서버(stdlib, 추가 의존성 없음)로 상주시킨다.
+
+엔드포인트: `GET /health`, `POST /summarize {source, query?}`, `POST /reload {ckpt}`.
+클라이언트 명령어는 REPL과 동일(`:query`, `:ckpt`, `:help`, `:q`).
+
 ## 설계상 보장
 
 - **LLM frozen**: `combine_logits`가 LLM 로짓을 detach → 그래디언트가 백본에 흐르지
