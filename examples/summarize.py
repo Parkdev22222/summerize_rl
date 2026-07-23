@@ -99,13 +99,19 @@ def build_summarizer(args) -> tuple[Summarizer, Config]:
         glossary=glossary,
         device=args.device,
         dtype=args.dtype,
+        attn_implementation=args.attn,
+        compile_decode=args.compile,
+        max_seq_len=args.max_seq_len,
         max_new_tokens=args.max_new_tokens,
         min_new_tokens=args.min_new_tokens,
     )
     print(
         f"model={args.model} dtype={args.dtype} device={args.device} "
+        f"attn={summarizer.backend.attn_implementation} compile={args.compile} "
         f"hidden={summarizer.backend.hidden_size} ckpt={args.ckpt} (step={step})"
     )
+    if args.compile:
+        print("[note] --compile: 첫 요약은 컴파일 때문에 느립니다(이후 빨라짐).")
     return summarizer, cfg
 
 
@@ -163,6 +169,13 @@ def main() -> None:
     p.add_argument("--glossary", default=None, help="JSON {term: [triggers]}; omit for demo glossary")
     p.add_argument("--device", default="cuda", help="cuda | cuda:0 | cpu")
     p.add_argument("--dtype", default="bfloat16", help="backbone dtype (bfloat16/float16/float32)")
+    p.add_argument("--attn", default="sdpa",
+                   choices=["sdpa", "flash_attention_2", "eager"],
+                   help="attention kernel (sdpa=safe fast default; flash_attention_2 fastest, needs flash-attn)")
+    p.add_argument("--compile", action="store_true",
+                   help="torch.compile + StaticCache decode (CUDA-graph step; needs Llama/Qwen-like model; first call slow)")
+    p.add_argument("--max-seq-len", type=int, default=2048,
+                   help="static cache/mask length bound for --compile (prompt+generation)")
     p.add_argument("--query", default=DEFAULT_QUERY, help="summarization instruction")
     p.add_argument("--max-new-tokens", type=int, default=None)
     p.add_argument("--min-new-tokens", type=int, default=None)

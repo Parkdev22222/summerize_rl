@@ -129,3 +129,29 @@ vLLM(OpenAI 호환)은 (1)(2)를 외부로 내주지 않고 이 공유-토큰 4�
 ## 범위 밖
 
 - 진짜 vLLM 통합(정책망 미적용이라 목적에 부적합). 인증/동시성 확장/스트리밍. 배치.
+
+---
+
+# 추가: 추론 가속 (2026-07-23)
+
+## 1. 융합 어텐션 커널 (`--attn`)
+
+`HFBackend(attn_implementation=...)` → sdpa(기본)/flash_attention_2/eager. 요청 커널이
+없으면 `flash_attention_2 → sdpa → eager`로 경고 후 폴백. 수치 동일(품질 무영향).
+
+## 2. torch.compile + StaticCache (`--compile`)
+
+- `HFBackend(compile_decode=True, max_seq_len=N)`: 디코드 스텝을 **고정 크기 StaticCache +
+  고정 폭 어텐션 마스크**로 만들어 shape를 정적화 → `torch.compile(mode="reduce-overhead")`가
+  CUDA graph로 캡처. 스텝/요청 간 동일 graph 재사용. 프리필은 eager(길이 가변).
+- start/step을 `_start_dynamic/_step_dynamic`(기존)와 `_start_static/_step_static`로 분기.
+  기본값 `compile_decode=False`라 기존 경로/테스트와 완전 호환.
+- StaticCache 호환 아키텍처(Llama/Qwen/Mistral 등) 필요. 첫 호출은 컴파일 비용.
+- reduce-overhead가 출력 버퍼를 재사용하므로 static 스텝 출력은 `.clone()`.
+- **검증**: 소형 Llama로 static(+compile) 경로가 dynamic 경로와 **토큰 동일** 출력을 내는지
+  통합 테스트(`tests/test_compile_static_integration.py`). CPU에서 실제 compile 실행.
+
+## 범위 밖 (가속)
+
+- 양자화(4-bit/AWQ/FP8): 효과 크나 정책망이 bf16 기준 학습 → 품질 이동 가능, A/B 필요.
+- 요청 연속 배칭(throughput): 대화형 1인 지연엔 체감 적음.

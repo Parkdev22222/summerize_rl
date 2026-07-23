@@ -157,6 +157,9 @@ def build_hf_summarizer(
     glossary: Glossary | None = None,
     device: str = "cuda",
     dtype: str = "bfloat16",
+    attn_implementation: str | None = None,
+    compile_decode: bool = False,
+    max_seq_len: int = 2048,
     max_new_tokens: int | None = None,
     min_new_tokens: int | None = None,
 ) -> tuple[Summarizer, Config, int]:
@@ -170,7 +173,14 @@ def build_hf_summarizer(
     """
     from .llm_backend import HFBackend  # lazy: keeps the core transformers-free
 
-    backend = HFBackend(model, device=device, dtype=dtype)
+    backend = HFBackend(
+        model,
+        device=device,
+        dtype=dtype,
+        attn_implementation=attn_implementation,
+        compile_decode=compile_decode,
+        max_seq_len=max_seq_len,
+    )
 
     cfg = Config()
     cfg.policy.llm_hidden_size = backend.hidden_size

@@ -90,10 +90,19 @@ class WeightPolicy(nn.Module):
         nn.init.zeros_(self.head.bias)
 
     def forward(self, features: torch.Tensor) -> Weights:
-        """features: [batch, input_dim] -> Weights (each [batch])."""
+        """features: [batch, input_dim] -> Weights (each [batch]).
+
+        `a` is learned per token (sigmoid) when ``config.learn_a`` is True,
+        otherwise held constant at ``config.fixed_a`` (no gradient flows through
+        it, so the head's a-column simply stays at init). `b, c, d` are always
+        a learned softmax over the source/core/term branches.
+        """
         features = features.float()
         raw = self.head(self.net(self.norm(features)))  # [batch, 4]
-        a = torch.sigmoid(raw[..., 0])  # (0, 1)
+        if self.config.learn_a:
+            a = torch.sigmoid(raw[..., 0])  # (0, 1)
+        else:
+            a = torch.full_like(raw[..., 0], self.config.fixed_a)  # constant, no grad
         bcd = torch.softmax(raw[..., 1:], dim=-1)  # sums to 1
         return Weights(a=a, b=bcd[..., 0], c=bcd[..., 1], d=bcd[..., 2])
 
