@@ -183,9 +183,27 @@ CUDA_VISIBLE_DEVICES=3 uv run python -m examples.serve \
     --model <model> --ckpt checkpoints/best.pt --attn flash_attention_2
 ```
 
-> 더 큰 가속(양자화 4-bit/AWQ, `torch.compile`+StaticCache로 CUDA graph화, 요청 연속
-> 배칭)도 가능하다. 특히 양자화는 정책망이 bf16 백본으로 학습됐으므로 요약이 달라질 수
-> 있어 A/B 검증이 필요하다.
+### 추론 속도 — torch.compile + StaticCache (CUDA graph)
+
+`--compile`을 주면 디코드를 **고정 크기 `StaticCache` + `torch.compile`된 모델**로 돌린다.
+매 토큰 스텝의 shape가 고정되어 **CUDA graph로 캡처**되므로 스텝당 파이썬/런치 오버헤드가
+크게 줄어든다(요청 간에도 같은 graph 재사용). 프리필은 길이가 가변이라 eager로 둔다.
+
+```bash
+CUDA_VISIBLE_DEVICES=3 uv run python -m examples.serve \
+    --model <llama/qwen-계열> --ckpt checkpoints/best.pt \
+    --attn flash_attention_2 --compile --max-seq-len 2048
+```
+
+- **StaticCache 호환 아키텍처**(Llama/Qwen/Mistral 등)가 필요하다.
+- **첫 요청은 컴파일 때문에 느리고**, 이후부터 빨라진다.
+- `--max-seq-len`은 (프롬프트+생성) 상한이자 스텝당 어텐션 폭이다. 실제 최대에 가깝게
+  잡아라(너무 크면 스텝마다 낭비 어텐션이 늘어 오히려 느려질 수 있다).
+- 출력은 기본(DynamicCache) 경로와 **토큰 단위로 동일**함이 테스트로 검증돼 있다
+  (`tests/test_compile_static_integration.py`, 소형 Llama).
+
+> 더 큰 가속으로 양자화(4-bit/AWQ/FP8, 메모리 대역폭↓)와 요청 연속 배칭도 가능하다.
+> 특히 양자화는 정책망이 bf16 백본으로 학습됐으므로 요약이 달라질 수 있어 A/B 검증이 필요하다.
 
 ## 설계상 보장
 

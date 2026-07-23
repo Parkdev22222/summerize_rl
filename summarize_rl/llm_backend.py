@@ -151,12 +151,22 @@ class HFBackend(LLMBackend):
         device: str = "cpu",
         dtype: str = "float32",
         attn_implementation: str | None = None,
+        compile_decode: bool = False,
+        max_seq_len: int = 2048,
     ):
         """attn_implementation: None (transformers default) | "sdpa" |
         "flash_attention_2" | "eager". A fused kernel (sdpa/flash_attention_2)
         speeds up the forward pass with identical math. If the requested kernel
         is unavailable it falls back (flash_attention_2 -> sdpa -> eager) with a
         notice, so this never hard-fails on a machine without flash-attn.
+
+        compile_decode: if True, decode with a fixed-size ``StaticCache`` and a
+        ``torch.compile``d model so the single-token step has static shapes and
+        can be captured as a CUDA graph (much lower per-step launch overhead).
+        Requires a StaticCache-compatible architecture (Llama/Qwen/Mistral/...).
+        ``max_seq_len`` bounds prompt+generation for the static cache/mask; keep
+        it near your real maximum (larger = more wasted per-step attention).
+        The first call pays a one-time compilation cost.
         """
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -178,6 +188,16 @@ class HFBackend(LLMBackend):
         self.pad_token_id = pad if pad is not None else self.eos_token_id
         # Left-pad so the last position aligns across branches after prefill.
         self.tokenizer.padding_side = "left"
+
+        self.compile_decode = compile_decode
+        self.max_seq_len = max_seq_len
+        # Compile only the single-token decode step (static shapes); prefill
+        # stays eager since its length varies per input.
+        self._decode_model = (
+            torch.compile(self.model, mode="reduce-overhead", fullgraph=False)
+            if compile_decode
+            else self.model
+        )
 
     @staticmethod
     def _attn_fallback_chain(requested: str | None) -> list[str | None]:
@@ -209,8 +229,20 @@ class HFBackend(LLMBackend):
                     print(f"[warn] attn_implementation={impl} 사용 불가 ({e}); 폴백")
         raise last_err  # type: ignore[misc]
 
-    @torch.no_grad()
     def start(self, branch_texts: dict[str, str]) -> tuple[Any, StepOutput]:
+        if self.compile_decode:
+            return self._start_static(branch_texts)
+        return self._start_dynamic(branch_texts)
+
+    def step(self, state: Any, token_id: int) -> StepOutput:
+        if self.compile_decode:
+            return self._step_static(state, token_id)
+        return self._step_dynamic(state, token_id)
+
+    # -- dynamic path (DynamicCache, eager) ---------------------------------
+
+    @torch.no_grad()
+    def _start_dynamic(self, branch_texts: dict[str, str]) -> tuple[Any, StepOutput]:
         texts = [branch_texts[name] for name in BRANCH_ORDER]
         enc = self.tokenizer(
             texts, return_tensors="pt", padding=True
@@ -230,7 +262,7 @@ class HFBackend(LLMBackend):
         return state, StepOutput(logits=logits, hidden=hidden)
 
     @torch.no_grad()
-    def step(self, state: Any, token_id: int) -> StepOutput:
+    def _step_dynamic(self, state: Any, token_id: int) -> StepOutput:
         n = len(BRANCH_ORDER)
         input_ids = torch.full((n, 1), token_id, device=self.device, dtype=torch.long)
         state["attention_mask"] = torch.cat(
@@ -247,6 +279,71 @@ class HFBackend(LLMBackend):
         state["past"] = out.past_key_values
         logits = out.logits[:, -1, :].float()
         hidden = out.hidden_states[-1][:, -1, :].float()
+        return StepOutput(logits=logits, hidden=hidden)
+
+    # -- static path (StaticCache, compiled single-token step) --------------
+    #
+    # A fixed-size StaticCache + a fixed-width attention mask keep every decode
+    # step at identical shapes, so the compiled step reuses one CUDA graph
+    # across tokens AND across requests. Prefill runs eager (length varies).
+    # Verified to produce token-identical output to the dynamic path.
+
+    @torch.no_grad()
+    def _start_static(self, branch_texts: dict[str, str]) -> tuple[Any, StepOutput]:
+        from transformers import StaticCache
+
+        texts = [branch_texts[name] for name in BRANCH_ORDER]
+        enc = self.tokenizer(texts, return_tensors="pt", padding=True).to(self.device)
+        input_ids, attn = enc["input_ids"], enc["attention_mask"]
+        b, prompt_len = input_ids.shape
+        if prompt_len >= self.max_seq_len:
+            raise ValueError(
+                f"prompt length {prompt_len} >= max_seq_len {self.max_seq_len}; "
+                "increase --max-seq-len (or shorten the input)."
+            )
+
+        cache = StaticCache(config=self.model.config, max_cache_len=self.max_seq_len)
+        cache_position = torch.arange(prompt_len, device=self.device)
+        out = self.model(
+            input_ids=input_ids,
+            attention_mask=attn,
+            past_key_values=cache,
+            use_cache=True,
+            output_hidden_states=True,
+            cache_position=cache_position,
+        )
+        # Fixed-width mask: 1 for real prompt tokens, filled in as we generate.
+        mask = torch.zeros((b, self.max_seq_len), dtype=attn.dtype, device=self.device)
+        mask[:, :prompt_len] = attn
+        state = {"cache": cache, "mask": mask, "pos": prompt_len}
+        logits = out.logits[:, -1, :].float()
+        hidden = out.hidden_states[-1][:, -1, :].float()
+        return state, StepOutput(logits=logits, hidden=hidden)
+
+    @torch.no_grad()
+    def _step_static(self, state: Any, token_id: int) -> StepOutput:
+        n = len(BRANCH_ORDER)
+        pos = state["pos"]
+        if pos >= self.max_seq_len:
+            raise ValueError(
+                f"generation exceeded max_seq_len {self.max_seq_len}; "
+                "increase --max-seq-len."
+            )
+        input_ids = torch.full((n, 1), token_id, device=self.device, dtype=torch.long)
+        state["mask"][:, pos] = 1
+        cache_position = torch.tensor([pos], device=self.device)
+        out = self._decode_model(
+            input_ids=input_ids,
+            attention_mask=state["mask"],  # fixed width -> static shape
+            past_key_values=state["cache"],
+            use_cache=True,
+            output_hidden_states=True,
+            cache_position=cache_position,
+        )
+        state["pos"] = pos + 1
+        # Clone: reduce-overhead reuses static output buffers across calls.
+        logits = out.logits[:, -1, :].float().clone()
+        hidden = out.hidden_states[-1][:, -1, :].float().clone()
         return StepOutput(logits=logits, hidden=hidden)
 
     def decode(self, token_ids: list[int]) -> str:
