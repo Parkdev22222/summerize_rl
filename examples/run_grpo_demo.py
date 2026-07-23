@@ -22,6 +22,7 @@ import torch
 from summarize_rl.config import Config, DecodeConfig, GRPOConfig, PolicyConfig, TrainConfig
 from summarize_rl.grpo import GRPOTrainer
 from summarize_rl.llm_backend import MockBackend
+from summarize_rl.logging_utils import make_logger
 from summarize_rl.policy import WeightPolicy
 from examples.sample_data import EXAMPLES, MILITARY_GLOSSARY
 from examples.run_demo import DEMO_BRANCH_BIAS, DEMO_VOCAB, VOCAB_SIZE
@@ -50,9 +51,14 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--logdir", default="runs/grpo",
+        help="TensorBoard run dir (empty or 'none' disables). View: tensorboard --logdir runs",
+    )
     args = parser.parse_args()
 
     trainer = build_trainer(args.seed)
+    logger = make_logger(args.logdir)
 
     print(f"{'step':>4} {'loss':>8} {'reward':>7} {'rew_ema':>8} {'kl':>6} "
           f"{'clip':>5} {'faith':>6} {'cov':>5} {'term':>5} {'ctr':>6} "
@@ -62,6 +68,7 @@ def main() -> None:
         example = EXAMPLES[step % len(EXAMPLES)]
         m = trainer.train_step([example])
         trainer.maybe_update_best(m.mean_reward)
+        logger.log_metrics(m, m.step)
         rew_ema = m.mean_reward if rew_ema is None else 0.9 * rew_ema + 0.1 * m.mean_reward
         print(f"{m.step:>4} {m.loss:>8.3f} {m.mean_reward:>7.3f} {rew_ema:>8.3f} "
               f"{m.kl:>6.3f} {m.clip_frac:>5.2f} {m.faithfulness:>6.3f} "
@@ -69,7 +76,10 @@ def main() -> None:
               f"{m.weight_a:>5.2f} {m.weight_b:>5.2f} {m.weight_c:>5.2f} "
               f"{m.weight_d:>5.2f} {m.grad_norm:>6.2f}")
 
+    logger.close()
     print(f"\nbest mean reward: {trainer.best_reward:.4f}")
+    if args.logdir and args.logdir.lower() != "none":
+        print(f"TensorBoard: tensorboard --logdir {args.logdir.split('/')[0]}")
 
 
 if __name__ == "__main__":
