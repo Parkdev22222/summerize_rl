@@ -73,7 +73,8 @@ def main() -> None:
     trainer = build_trainer(args.seed)
 
     print(f"{'step':>4} {'loss':>8} {'reward':>7} {'faith':>6} {'cov':>5} "
-          f"{'term':>5} {'a':>5} {'b':>5} {'c':>5} {'d':>5} {'ent':>5} {'gnorm':>6}")
+          f"{'term':>5} {'ctr':>6} {'a':>5} {'b':>5} {'c':>5} {'d':>5} "
+          f"{'ent':>5} {'gnorm':>6}")
     for step in range(args.steps):
         example = EXAMPLES[step % len(EXAMPLES)]
         m = trainer.train_step([example])
@@ -81,8 +82,9 @@ def main() -> None:
             pass
         print(f"{m.step:>4} {m.loss:>8.3f} {m.mean_reward:>7.3f} "
               f"{m.faithfulness:>6.3f} {m.coverage:>5.3f} {m.term_usage:>5.3f} "
-              f"{m.weight_a:>5.2f} {m.weight_b:>5.2f} {m.weight_c:>5.2f} "
-              f"{m.weight_d:>5.2f} {m.entropy:>5.2f} {m.grad_norm:>6.2f}")
+              f"{m.contrast:>6.3f} {m.weight_a:>5.2f} {m.weight_b:>5.2f} "
+              f"{m.weight_c:>5.2f} {m.weight_d:>5.2f} {m.entropy:>5.2f} "
+              f"{m.grad_norm:>6.2f}")
 
     print(f"\nbest mean reward: {trainer.best_reward:.4f}")
 

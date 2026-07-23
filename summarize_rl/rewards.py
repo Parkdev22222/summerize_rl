@@ -1,11 +1,17 @@
 """Reference-free reward (Section 2.4, 2.5.7).
 
-    R = w1*Faithfulness + w2*TripletCoverage + w3*TermUsage - w4*LengthPenalty
+    R = w1*Faithfulness + w2*TripletCoverage + w3*TermUsage
+        + w5*PriorContrast - w4*LengthPenalty
 
 No gold summary is required. Each component is in a bounded, interpretable
 range. Faithfulness is pluggable: the default is a dependency-free lexical
 proxy; a real NLI/FactKB model can be injected via the FaithfulnessModel
 protocol.
+
+PriorContrast is a PMI term supplied by the decoder (mean per-token log-prob
+of the chosen tokens under the source-conditioned branches minus under the
+query prior Q). It is the only reward component sensitive to the prior-removal
+weight `a`, so it is what lets `a` learn.
 """
 
 from __future__ import annotations
@@ -54,6 +60,7 @@ class RewardBreakdown:
     faithfulness: float
     coverage: float
     term_usage: float
+    contrast: float
     length_penalty: float
     total: float
 
@@ -114,6 +121,7 @@ def compute_reward(
     config: RewardConfig,
     faithfulness_model: FaithfulnessModel | None = None,
     summary_length: int | None = None,
+    contrast: float = 0.0,
 ) -> RewardBreakdown:
     fm = faithfulness_model or LexicalFaithfulness()
     faith = float(fm.score(summary, source))
@@ -126,12 +134,14 @@ def compute_reward(
         config.w_faithfulness * faith
         + config.w_coverage * cov
         + config.w_term * term
+        + config.w_contrast * contrast
         - config.w_length * lpen
     )
     return RewardBreakdown(
         faithfulness=faith,
         coverage=cov,
         term_usage=term,
+        contrast=contrast,
         length_penalty=lpen,
         total=total,
     )
