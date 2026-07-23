@@ -113,6 +113,39 @@ CUDA_VISIBLE_DEVICES=0 uv run python -m examples.train_real \
 만든다. 라이브러리는 모델 샤딩/데이터 병렬 롤아웃을 구현하지 않으므로 두 번째 H100은
 현재 활용되지 않는다(더 큰 백본 샤딩은 `HFBackend`에 `device_map` 지원 추가 필요).
 
+## 학습된 가중치로 요약 (추론 REPL)
+
+학습이 `checkpoints/`에 저장한 정책망 가중치(`best.pt` 등)를 **붙여서** 요약을 낸다.
+LLM은 frozen, 학습된 소형 정책망만 로드해 **greedy** PMI 디코딩한다. `--ckpt` 기본값은
+`checkpoints/best.pt`.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 uv run python -m examples.summarize \
+    --model <korean-7B-model> --dtype bfloat16 \
+    --ckpt checkpoints/best.pt
+```
+
+원문을 붙여넣고 **빈 줄**로 입력을 끝내면 요약이 나온다. "쿼리"는 요약 **지시문**(`--query`,
+기본 "…군사 표준용어를 사용하여 요약하시오.")이며 REPL에서 바꿀 수 있다.
+
+| REPL 명령어 | 동작 |
+|---|---|
+| *(원문 + 빈 줄)* | 요약 출력 (+ 활성 표준용어, 평균 가중치 `[a,b,c,d]`) |
+| `:query <지시문>` | 요약 지시문 변경 |
+| `:ckpt <경로>` | 다른 체크포인트 즉시 재로드 |
+| `:help` | 도움말 |
+| `:q` / `:quit` / `:exit` | 종료 |
+
+프로그램에서 재사용하려면 `summarize_rl.infer.Summarizer`를 직접 쓴다 (백본 비의존):
+
+```python
+from summarize_rl.infer import Summarizer
+s = Summarizer(backend, policy, cfg, glossary=glossary)
+s.load_checkpoint("checkpoints/best.pt")
+result = s.summarize("적 부대가 이동 중이며 고지를 점령했다.")
+print(result.text, result.active_terms, result.mean_weights)
+```
+
 ## 설계상 보장
 
 - **LLM frozen**: `combine_logits`가 LLM 로짓을 detach → 그래디언트가 백본에 흐르지
