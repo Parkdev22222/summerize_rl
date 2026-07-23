@@ -82,6 +82,12 @@ def validate(records: list[dict]) -> None:
 def main() -> None:
     check_only = "--check" in sys.argv
     records = load_parts()
+    if not records:
+        raise SystemExit(
+            f"no records found under {PARTS_GLOB}\n"
+            "Generate the per-batch parts (data/parts/part_*.jsonl) first, "
+            "then re-run this script to build the merged dataset."
+        )
     records.sort(key=lambda r: r.get("id", 1 << 30))
     validate(records)
     ids = [r["id"] for r in records]
