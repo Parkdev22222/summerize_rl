@@ -148,3 +148,41 @@ class Summarizer:
             active_terms=active_terms,
             mean_weights=mean_weights,  # type: ignore[arg-type]
         )
+
+
+def build_hf_summarizer(
+    model: str,
+    ckpt: str,
+    *,
+    glossary: Glossary | None = None,
+    device: str = "cuda",
+    dtype: str = "bfloat16",
+    max_new_tokens: int | None = None,
+    min_new_tokens: int | None = None,
+) -> tuple[Summarizer, Config, int]:
+    """Build a real-backbone Summarizer and load a checkpoint. Returns (summarizer, config, step).
+
+    Loads a frozen ``HFBackend``, syncs the default ``Config`` to it (hidden
+    size, eos/pad ids), puts a fresh ``WeightPolicy`` on the same device, and
+    loads the checkpoint. Shared by the REPL (:mod:`examples.summarize`) and the
+    server (:mod:`examples.serve`). ``HFBackend`` is imported lazily so the
+    backend-agnostic core above never requires transformers.
+    """
+    from .llm_backend import HFBackend  # lazy: keeps the core transformers-free
+
+    backend = HFBackend(model, device=device, dtype=dtype)
+
+    cfg = Config()
+    cfg.policy.llm_hidden_size = backend.hidden_size
+    cfg.decode.eos_token_id = backend.eos_token_id
+    cfg.decode.pad_token_id = backend.pad_token_id
+    if max_new_tokens is not None:
+        cfg.decode.max_new_tokens = max_new_tokens
+    if min_new_tokens is not None:
+        cfg.decode.min_new_tokens = min_new_tokens
+
+    dev = torch.device(device)
+    policy = WeightPolicy(cfg.policy).to(dev)
+    summarizer = Summarizer(backend, policy, cfg, glossary=glossary)
+    step = summarizer.load_checkpoint(ckpt)
+    return summarizer, cfg, step

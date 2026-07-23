@@ -27,14 +27,10 @@ import json
 import os
 import sys
 
-import torch
-
 from summarize_rl.branches import Example
 from summarize_rl.config import Config
 from summarize_rl.glossary import Glossary
-from summarize_rl.infer import Summarizer
-from summarize_rl.llm_backend import HFBackend
-from summarize_rl.policy import WeightPolicy
+from summarize_rl.infer import Summarizer, build_hf_summarizer
 
 DEFAULT_QUERY = Example.__dataclass_fields__["query"].default
 
@@ -96,26 +92,19 @@ def print_summary(result) -> None:
 
 
 def build_summarizer(args) -> tuple[Summarizer, Config]:
-    backend = HFBackend(args.model, device=args.device, dtype=args.dtype)
-
-    cfg = Config()
-    cfg.policy.llm_hidden_size = backend.hidden_size
-    cfg.decode.eos_token_id = backend.eos_token_id
-    cfg.decode.pad_token_id = backend.pad_token_id
-    if args.max_new_tokens is not None:
-        cfg.decode.max_new_tokens = args.max_new_tokens
-    if args.min_new_tokens is not None:
-        cfg.decode.min_new_tokens = args.min_new_tokens
-
-    dev = torch.device(args.device)
-    policy = WeightPolicy(cfg.policy).to(dev)
     glossary = load_glossary(args.glossary)
-    summarizer = Summarizer(backend, policy, cfg, glossary=glossary)
-
-    step = summarizer.load_checkpoint(args.ckpt)
+    summarizer, cfg, step = build_hf_summarizer(
+        args.model,
+        args.ckpt,
+        glossary=glossary,
+        device=args.device,
+        dtype=args.dtype,
+        max_new_tokens=args.max_new_tokens,
+        min_new_tokens=args.min_new_tokens,
+    )
     print(
         f"model={args.model} dtype={args.dtype} device={args.device} "
-        f"hidden={backend.hidden_size} ckpt={args.ckpt} (step={step})"
+        f"hidden={summarizer.backend.hidden_size} ckpt={args.ckpt} (step={step})"
     )
     return summarizer, cfg
 
