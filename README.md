@@ -162,6 +162,65 @@ result = s.summarize("적 부대가 이동 중이며 고지를 점령했다.")
 print(result.text, result.active_terms, result.mean_weights)
 ```
 
+## 상주 서버 + 대화형 클라이언트 (답만 확인)
+
+무거운 백본을 매번 로드하지 않고, **GPU 1장에 상주시킨 서버**에 대화형 클라이언트로
+질의해 **답(요약)만 확인**한다. `CUDA_VISIBLE_DEVICES`로 카드 1장 고정.
+
+```bash
+# 1) 서버: GPU 3번에 백본+체크포인트 상주
+CUDA_VISIBLE_DEVICES=3 uv run python -m examples.serve \
+    --model <korean-7B-model> --dtype bfloat16 \
+    --ckpt checkpoints/best.pt --host 127.0.0.1 --port 8000
+
+# 2) 클라이언트: 터미널 REPL (모델 없음, 서버에 POST만)
+uv run python -m examples.summarize_client --server http://127.0.0.1:8000
+```
+
+> **왜 vLLM이 아닌가:** 이 요약은 4갈래 PMI *정책망* 디코딩이라 매 스텝 4브랜치의 logits
+> 전체 + hidden state + 대조 결합이 필요하다. 표준 vLLM은 이를 노출하지 않아, 올려도
+> **학습된 가중치가 적용된 요약이 나오지 않는다.** 그래서 `Summarizer`를 감싼 경량 HTTP
+> 서버(stdlib, 추가 의존성 없음)로 상주시킨다.
+
+엔드포인트: `GET /health`, `POST /summarize {source, query?}`, `POST /reload {ckpt}`.
+클라이언트 명령어는 REPL과 동일(`:query`, `:ckpt`, `:help`, `:q`).
+
+### 추론 속도 — 어텐션 커널
+
+vLLM 엔진은 이 4갈래 PMI 디코딩을 못 돌리지만, 융합 어텐션 커널은 그대로 쓸 수 있다.
+`serve.py`/`summarize.py`의 `--attn`으로 선택한다(수치 동일, 품질 영향 없음):
+
+- `sdpa` (기본): torch SDPA, 어디서나 안전하게 빠름.
+- `flash_attention_2`: 가장 빠름. `flash-attn` 설치 필요(없으면 자동으로 `sdpa`→`eager` 폴백).
+- `eager`: 폴백/디버그용.
+
+```bash
+CUDA_VISIBLE_DEVICES=3 uv run python -m examples.serve \
+    --model <model> --ckpt checkpoints/best.pt --attn flash_attention_2
+```
+
+### 추론 속도 — torch.compile + StaticCache (CUDA graph)
+
+`--compile`을 주면 디코드를 **고정 크기 `StaticCache` + `torch.compile`된 모델**로 돌린다.
+매 토큰 스텝의 shape가 고정되어 **CUDA graph로 캡처**되므로 스텝당 파이썬/런치 오버헤드가
+크게 줄어든다(요청 간에도 같은 graph 재사용). 프리필은 길이가 가변이라 eager로 둔다.
+
+```bash
+CUDA_VISIBLE_DEVICES=3 uv run python -m examples.serve \
+    --model <llama/qwen-계열> --ckpt checkpoints/best.pt \
+    --attn flash_attention_2 --compile --max-seq-len 2048
+```
+
+- **StaticCache 호환 아키텍처**(Llama/Qwen/Mistral 등)가 필요하다.
+- **첫 요청은 컴파일 때문에 느리고**, 이후부터 빨라진다.
+- `--max-seq-len`은 (프롬프트+생성) 상한이자 스텝당 어텐션 폭이다. 실제 최대에 가깝게
+  잡아라(너무 크면 스텝마다 낭비 어텐션이 늘어 오히려 느려질 수 있다).
+- 출력은 기본(DynamicCache) 경로와 **토큰 단위로 동일**함이 테스트로 검증돼 있다
+  (`tests/test_compile_static_integration.py`, 소형 Llama).
+
+> 더 큰 가속으로 양자화(4-bit/AWQ/FP8, 메모리 대역폭↓)와 요청 연속 배칭도 가능하다.
+> 특히 양자화는 정책망이 bf16 백본으로 학습됐으므로 요약이 달라질 수 있어 A/B 검증이 필요하다.
+
 ## 설계상 보장
 
 - **LLM frozen**: `combine_logits`가 LLM 로짓을 detach → 그래디언트가 백본에 흐르지

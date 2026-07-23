@@ -27,14 +27,10 @@ import json
 import os
 import sys
 
-import torch
-
 from summarize_rl.branches import Example
 from summarize_rl.config import Config
 from summarize_rl.glossary import Glossary
-from summarize_rl.infer import Summarizer
-from summarize_rl.llm_backend import HFBackend
-from summarize_rl.policy import WeightPolicy
+from summarize_rl.infer import Summarizer, build_hf_summarizer
 
 DEFAULT_QUERY = Example.__dataclass_fields__["query"].default
 
@@ -96,27 +92,26 @@ def print_summary(result) -> None:
 
 
 def build_summarizer(args) -> tuple[Summarizer, Config]:
-    backend = HFBackend(args.model, device=args.device, dtype=args.dtype)
-
-    cfg = Config()
-    cfg.policy.llm_hidden_size = backend.hidden_size
-    cfg.decode.eos_token_id = backend.eos_token_id
-    cfg.decode.pad_token_id = backend.pad_token_id
-    if args.max_new_tokens is not None:
-        cfg.decode.max_new_tokens = args.max_new_tokens
-    if args.min_new_tokens is not None:
-        cfg.decode.min_new_tokens = args.min_new_tokens
-
-    dev = torch.device(args.device)
-    policy = WeightPolicy(cfg.policy).to(dev)
     glossary = load_glossary(args.glossary)
-    summarizer = Summarizer(backend, policy, cfg, glossary=glossary)
-
-    step = summarizer.load_checkpoint(args.ckpt)
+    summarizer, cfg, step = build_hf_summarizer(
+        args.model,
+        args.ckpt,
+        glossary=glossary,
+        device=args.device,
+        dtype=args.dtype,
+        attn_implementation=args.attn,
+        compile_decode=args.compile,
+        max_seq_len=args.max_seq_len,
+        max_new_tokens=args.max_new_tokens,
+        min_new_tokens=args.min_new_tokens,
+    )
     print(
         f"model={args.model} dtype={args.dtype} device={args.device} "
-        f"hidden={backend.hidden_size} ckpt={args.ckpt} (step={step})"
+        f"attn={summarizer.backend.attn_implementation} compile={args.compile} "
+        f"hidden={summarizer.backend.hidden_size} ckpt={args.ckpt} (step={step})"
     )
+    if args.compile:
+        print("[note] --compile: 첫 요약은 컴파일 때문에 느립니다(이후 빨라짐).")
     return summarizer, cfg
 
 
@@ -174,6 +169,13 @@ def main() -> None:
     p.add_argument("--glossary", default=None, help="JSON {term: [triggers]}; omit for demo glossary")
     p.add_argument("--device", default="cuda", help="cuda | cuda:0 | cpu")
     p.add_argument("--dtype", default="bfloat16", help="backbone dtype (bfloat16/float16/float32)")
+    p.add_argument("--attn", default="sdpa",
+                   choices=["sdpa", "flash_attention_2", "eager"],
+                   help="attention kernel (sdpa=safe fast default; flash_attention_2 fastest, needs flash-attn)")
+    p.add_argument("--compile", action="store_true",
+                   help="torch.compile + StaticCache decode (CUDA-graph step; needs Llama/Qwen-like model; first call slow)")
+    p.add_argument("--max-seq-len", type=int, default=2048,
+                   help="static cache/mask length bound for --compile (prompt+generation)")
     p.add_argument("--query", default=DEFAULT_QUERY, help="summarization instruction")
     p.add_argument("--max-new-tokens", type=int, default=None)
     p.add_argument("--min-new-tokens", type=int, default=None)
