@@ -67,7 +67,9 @@ def test_gradient_flows_to_policy():
     policy = WeightPolicy(cfg)
     feats = _hidden(4, 8).as_features(cfg.use_contrast_features)
     w = policy(feats)
-    loss = (w.a.sum() + w.b.sum() + w.c.sum() + w.d.sum())
+    # Weighted over b,c,d: a plain b+c+d sum is identically 1 (softmax) and,
+    # with a fixed, would give an analytically-zero gradient.
+    loss = 1.0 * w.b.sum() + 2.0 * w.c.sum() + 3.0 * w.d.sum()
     loss.backward()
     assert policy.head.weight.grad is not None
     assert torch.any(policy.head.weight.grad != 0)
