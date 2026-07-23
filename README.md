@@ -27,6 +27,7 @@ logit_c = (1 + a) · (b·logit_XQ + c·logit_SQ + d·logit_GQ) − a·logit_Q
 ```bash
 uv sync                      # 가상환경(.venv) 생성 + 핵심 deps(torch) + dev(pytest,numpy)
 uv sync --extra hf           # 실제 백본(HFBackend, transformers) 사용 시 추가
+uv sync --extra tb           # TensorBoard 로깅 사용 시 추가
 ```
 
 이후 모든 명령은 `uv run` 앞에 붙여 실행한다 (venv 자동 활성화):
@@ -37,6 +38,19 @@ uv run pytest
 ```
 
 의존성은 `pyproject.toml`에 선언되어 있고 `uv.lock`으로 고정된다.
+
+### TensorBoard로 실험 결과 보기
+
+학습 스크립트(`run_demo`, `train_real`)는 매 스텝의 지표를 `--logdir`(기본
+`runs/<name>`)에 기록한다. `reward/*`, `weights/*`, `loss/*`, `optim/*`,
+`policy/*` 등 태그 네임스페이스로 정리된다.
+
+```bash
+uv run --extra tb python -m examples.run_demo --steps 200 --logdir runs/scst
+uv run --extra tb tensorboard --logdir runs        # 브라우저에서 확인
+```
+
+`--logdir ''`(또는 `none`)로 로깅을 끌 수 있다.
 
 ### pip (대안)
 

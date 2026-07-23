@@ -34,6 +34,7 @@ from summarize_rl.branches import Example, Triplet
 from summarize_rl.config import Config
 from summarize_rl.glossary import Glossary
 from summarize_rl.llm_backend import HFBackend
+from summarize_rl.logging_utils import make_logger
 from summarize_rl.policy import WeightPolicy
 from summarize_rl.train import SCSTTrainer
 
@@ -95,6 +96,10 @@ def main() -> None:
     p.add_argument("--limit", type=int, default=None, help="use only the first N examples (smoke)")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--log-every", type=int, default=1)
+    p.add_argument(
+        "--logdir", default="runs/train_real",
+        help="TensorBoard run dir (empty or 'none' disables). View: tensorboard --logdir runs",
+    )
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -133,6 +138,7 @@ def main() -> None:
     examples = load_corpus(args.data, args.query, args.limit)
 
     trainer = SCSTTrainer(policy, backend, cfg, glossary=glossary, generator=gen)
+    logger = make_logger(args.logdir)
 
     os.makedirs(args.ckpt_dir, exist_ok=True)
     print(
@@ -154,12 +160,14 @@ def main() -> None:
             trainer.save_checkpoint(os.path.join(args.ckpt_dir, "best.pt"), is_best=True)
         if cfg.train.save_every and (step + 1) % cfg.train.save_every == 0:
             trainer.save_checkpoint(os.path.join(args.ckpt_dir, f"step{step+1}.pt"))
+        logger.log_metrics(m, m.step)
         if step % args.log_every == 0:
             print(f"{m.step:>5} {m.loss:>8.3f} {m.mean_reward:>7.3f} "
                   f"{m.faithfulness:>6.3f} {m.coverage:>5.3f} {m.term_usage:>5.3f} "
                   f"{m.weight_a:>5.2f} {m.weight_b:>5.2f} {m.weight_c:>5.2f} "
                   f"{m.weight_d:>5.2f} {m.grad_norm:>6.2f} {m.lr:>9.2e}")
 
+    logger.close()
     print(f"\nbest mean reward: {trainer.best_reward:.4f}  (checkpoints in {args.ckpt_dir}/)")
 
 
