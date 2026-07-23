@@ -245,11 +245,11 @@ class SCSTTrainer:
         self.optimizer.zero_grad()
 
         agg: dict[str, float] = {}
-        last_loss = 0.0
+        batch_loss = 0.0  # mean loss over the micro-batch = the actual objective
         for example in batch:
             loss, m = self.compute_loss(example)
             (loss / len(batch)).backward()
-            last_loss = float(loss.item())
+            batch_loss += float(loss.item()) / len(batch)
             for key, val in m.items():
                 agg[key] = agg.get(key, 0.0) + val / len(batch)
 
@@ -263,7 +263,7 @@ class SCSTTrainer:
 
         metrics = StepMetrics(
             step=self._global_step,
-            loss=last_loss,
+            loss=batch_loss,
             grad_norm=float(grad_norm),
             lr=float(self.scheduler.get_last_lr()[0]),
             **{k: agg[k] for k in (

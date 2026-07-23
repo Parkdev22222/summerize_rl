@@ -72,15 +72,20 @@ def main() -> None:
 
     trainer = build_trainer(args.seed)
 
-    print(f"{'step':>4} {'loss':>8} {'reward':>7} {'faith':>6} {'cov':>5} "
-          f"{'term':>5} {'ctr':>6} {'a':>5} {'b':>5} {'c':>5} {'d':>5} "
-          f"{'ent':>5} {'gnorm':>6}")
+    # The per-step SCST loss is mean-zero noise (advantages sum to ~0), so it
+    # oscillates and is NOT a progress signal. Track a smoothed reward (EMA)
+    # instead -- that is the curve that should trend up as the policy learns.
+    print(f"{'step':>4} {'loss':>8} {'reward':>7} {'rew_ema':>8} {'faith':>6} "
+          f"{'cov':>5} {'term':>5} {'ctr':>6} {'a':>5} {'b':>5} {'c':>5} "
+          f"{'d':>5} {'ent':>5} {'gnorm':>6}")
+    rew_ema = None
     for step in range(args.steps):
         example = EXAMPLES[step % len(EXAMPLES)]
         m = trainer.train_step([example])
         if trainer.maybe_update_best(m.mean_reward):
             pass
-        print(f"{m.step:>4} {m.loss:>8.3f} {m.mean_reward:>7.3f} "
+        rew_ema = m.mean_reward if rew_ema is None else 0.9 * rew_ema + 0.1 * m.mean_reward
+        print(f"{m.step:>4} {m.loss:>8.3f} {m.mean_reward:>7.3f} {rew_ema:>8.3f} "
               f"{m.faithfulness:>6.3f} {m.coverage:>5.3f} {m.term_usage:>5.3f} "
               f"{m.contrast:>6.3f} {m.weight_a:>5.2f} {m.weight_b:>5.2f} "
               f"{m.weight_c:>5.2f} {m.weight_d:>5.2f} {m.entropy:>5.2f} "
