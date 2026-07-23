@@ -5,3 +5,6 @@ __pycache__/
 checkpoints/
 *.pt
 .venv/
+
+# stray agent scratch files (should live in the session scratchpad, not the repo)
+/scratchpad_*.jsonl
