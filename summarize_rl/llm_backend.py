@@ -137,6 +137,39 @@ class MockBackend(LLMBackend):
         return " ".join(f"t{t}" for t in token_ids)
 
 
+def plan_devices(
+    *,
+    num_gpus: int | None = None,
+    device: str = "cpu",
+    device_map: str | None = None,
+    max_memory_per_gpu: str = "70GiB",
+) -> dict[str, Any]:
+    """Decide how many GPUs to use and how to place the model.
+
+    Pure (no CUDA calls) so it is unit-testable on CPU. Returns the kwargs the
+    loader needs: {"device", "device_map", "max_memory"}.
+
+    num_gpus:
+        None  -> use `device`/`device_map` as given (backward compatible).
+        1     -> single GPU: load on "cuda:0", no sharding.
+        >1    -> shard across cuda:0..num_gpus-1 via device_map="auto",
+                 capping each GPU's budget with max_memory so accelerate does
+                 not spill onto GPUs the user did not allocate.
+    """
+    if num_gpus is None:
+        return {"device": device, "device_map": device_map, "max_memory": None}
+    if num_gpus < 1:
+        raise ValueError(f"num_gpus must be >= 1, got {num_gpus}")
+    if num_gpus == 1:
+        return {"device": "cuda:0", "device_map": None, "max_memory": None}
+    max_memory = {i: max_memory_per_gpu for i in range(num_gpus)}
+    return {
+        "device": device,
+        "device_map": device_map or "auto",
+        "max_memory": max_memory,
+    }
+
+
 class HFBackend(LLMBackend):
     """Wraps a frozen Hugging Face causal LM. transformers imported lazily.
 
@@ -154,6 +187,8 @@ class HFBackend(LLMBackend):
         trust_remote_code: bool = False,
         use_chat_template: bool = False,
         device_map: str | None = None,
+        num_gpus: int | None = None,
+        max_memory_per_gpu: str = "70GiB",
     ):
         """Load and freeze a HF causal LM.
 
@@ -163,8 +198,23 @@ class HFBackend(LLMBackend):
             template (recommended for instruct/reasoning models like EXAONE).
         device_map: pass "auto" to shard across GPUs via accelerate; otherwise
             the model is moved to `device`.
+        num_gpus: how many GPUs to use. 1 = single GPU; >1 shards the frozen
+            backbone across that many GPUs (max_memory-capped). None keeps the
+            explicit device/device_map. A 7.8B backbone fits on one H200, so
+            num_gpus>1 is only for larger backbones or headroom.
+        max_memory_per_gpu: per-GPU memory budget when num_gpus>1 (e.g. "120GiB"
+            on H200).
         """
         from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        plan = plan_devices(
+            num_gpus=num_gpus,
+            device=device,
+            device_map=device_map,
+            max_memory_per_gpu=max_memory_per_gpu,
+        )
+        device = plan["device"]
+        device_map = plan["device_map"]
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name, trust_remote_code=trust_remote_code
@@ -176,6 +226,8 @@ class HFBackend(LLMBackend):
         }
         if device_map is not None:
             load_kwargs["device_map"] = device_map
+            if plan["max_memory"] is not None:
+                load_kwargs["max_memory"] = plan["max_memory"]
         self.model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
         if device_map is None:
             self.model = self.model.to(device)

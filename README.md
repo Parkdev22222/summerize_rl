@@ -63,6 +63,28 @@ python -m examples.train_exaone \
 tensorboard --logdir runs/exaone
 ```
 
+### GPU 개수 제어
+
+```bash
+# 단일 GPU (7.8B는 H200 1장에 충분)
+python -m examples.train_exaone --num-gpus 1
+
+# 여러 장에 백본 샤딩 (더 큰 백본/헤드룸용). H200이면 장당 ~120GiB
+python -m examples.train_exaone --num-gpus 2 --max-memory-per-gpu 120GiB
+
+# 특정 GPU만 지정 (CUDA_VISIBLE_DEVICES 자동 설정)
+python -m examples.train_exaone --gpu-ids "0,3"
+```
+
+- `--num-gpus 1`: `cuda:0` 단일 로드
+- `--num-gpus N>1`: `device_map="auto"` + `max_memory`로 정확히 N장에만 샤딩
+- `--gpu-ids "0,3"`: 그 GPU들만 보이게 고정(`--num-gpus`보다 우선). torch가 CUDA를
+  초기화하기 **전에** `CUDA_VISIBLE_DEVICES`를 설정하므로 정확히 적용됨
+- 미지정 시: `--device` 값을 그대로 사용(기존 동작)
+
+> 참고: 정책망은 항상 fp32 단일 장치이고 아주 작다. 멀티 GPU는 **얼린 백본 샤딩**을
+> 위한 것이므로 7.8B에는 보통 1장이면 된다.
+
 EXAONE 관련:
 - 커스텀 모델링 코드를 쓰므로 `trust_remote_code=True` (기본 적용)
 - instruct/reasoning 튜닝 모델이라 각 갈래에 chat template 적용 (`--no-chat-template`로 해제)

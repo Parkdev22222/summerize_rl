@@ -25,15 +25,27 @@ a placeholder. Swap `load_dataset()` for the real KG source/triplet loader.
 from __future__ import annotations
 
 import argparse
+import os
 
-import torch
 
-from summarize_rl.config import Config
-from summarize_rl.llm_backend import HFBackend
-from summarize_rl.logging_utils import TensorBoardLogger
-from summarize_rl.policy import WeightPolicy
-from summarize_rl.train import SCSTTrainer
-from examples.sample_data import EXAMPLES, MILITARY_GLOSSARY
+def _select_visible_gpus(gpu_ids: str | None, num_gpus: int | None) -> int | None:
+    """Pin CUDA_VISIBLE_DEVICES BEFORE torch initializes CUDA.
+
+    Must run before torch is imported / any CUDA call, so that both torch and
+    accelerate see exactly the requested GPUs (remapped to 0..k-1). Returns the
+    effective GPU count to hand to HFBackend.
+    """
+    if gpu_ids:
+        ids = [s.strip() for s in gpu_ids.split(",") if s.strip() != ""]
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(ids)
+        return len(ids)
+    if num_gpus is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in range(num_gpus))
+        return num_gpus
+    return None
+
+
+# NOTE: heavy imports (torch/transformers) happen inside main() AFTER GPU pinning.
 
 
 def load_dataset():
@@ -42,12 +54,16 @@ def load_dataset():
     Replace with the real corpus loader. Here we reuse the synthetic examples
     and hold out one for validation.
     """
+    from examples.sample_data import EXAMPLES
+
     train = EXAMPLES
     val = EXAMPLES[:1]
     return train, val
 
 
-def build_config(args) -> Config:
+def build_config(args):
+    from summarize_rl.config import Config
+
     cfg = Config()
     cfg.decode.max_new_tokens = args.max_new_tokens
     cfg.decode.min_new_tokens = args.min_new_tokens
@@ -73,6 +89,16 @@ def main() -> None:
     p.add_argument("--no-chat-template", action="store_true")
     p.add_argument("--no-trust-remote-code", action="store_true")
 
+    # GPU control
+    p.add_argument("--num-gpus", type=int, default=None,
+                   help="how many GPUs to use (1=single; >1 shards the backbone). "
+                        "Default: use --device as-is.")
+    p.add_argument("--gpu-ids", default=None,
+                   help='specific GPU ids, e.g. "0,2,3". Overrides --num-gpus '
+                        "and pins CUDA_VISIBLE_DEVICES to exactly these.")
+    p.add_argument("--max-memory-per-gpu", default="120GiB",
+                   help="per-GPU memory budget when sharding (H200: ~120GiB).")
+
     p.add_argument("--steps", type=int, default=2000)
     p.add_argument("--num-samples", type=int, default=5)
     p.add_argument("--lr", type=float, default=3e-5)
@@ -92,6 +118,19 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=42)
     args = p.parse_args()
 
+    # Pin visible GPUs BEFORE importing torch / touching CUDA.
+    effective_num_gpus = _select_visible_gpus(args.gpu_ids, args.num_gpus)
+    if effective_num_gpus is not None:
+        print(f"Using {effective_num_gpus} GPU(s): "
+              f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')}")
+
+    import torch  # noqa: E402  (deferred until after GPU pinning)
+    from summarize_rl.llm_backend import HFBackend
+    from summarize_rl.logging_utils import TensorBoardLogger
+    from summarize_rl.policy import WeightPolicy
+    from summarize_rl.train import SCSTTrainer
+    from examples.sample_data import MILITARY_GLOSSARY
+
     torch.manual_seed(args.seed)
 
     print(f"Loading backbone: {args.model} ({args.dtype} on {args.device}) ...")
@@ -102,6 +141,8 @@ def main() -> None:
         trust_remote_code=not args.no_trust_remote_code,
         use_chat_template=not args.no_chat_template,
         device_map=args.device_map,
+        num_gpus=effective_num_gpus,
+        max_memory_per_gpu=args.max_memory_per_gpu,
     )
     print(f"  hidden_size={backend.hidden_size} vocab_size={backend.vocab_size} "
           f"eos={backend.eos_token_id}")
