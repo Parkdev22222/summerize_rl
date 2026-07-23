@@ -150,30 +150,69 @@ class HFBackend(LLMBackend):
         model_name: str,
         device: str = "cpu",
         dtype: str = "float32",
+        *,
+        trust_remote_code: bool = False,
+        use_chat_template: bool = False,
+        device_map: str | None = None,
     ):
+        """Load and freeze a HF causal LM.
+
+        trust_remote_code: required by models shipping custom modeling code
+            (e.g. LGAI-EXAONE/EXAONE-*). Set True for EXAONE.
+        use_chat_template: wrap each branch text with the tokenizer's chat
+            template (recommended for instruct/reasoning models like EXAONE).
+        device_map: pass "auto" to shard across GPUs via accelerate; otherwise
+            the model is moved to `device`.
+        """
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name, trust_remote_code=trust_remote_code
+        )
         torch_dtype = getattr(torch, dtype)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name, dtype=torch_dtype, output_hidden_states=True
-        ).to(device)
+        load_kwargs: dict[str, Any] = {
+            "dtype": torch_dtype,
+            "trust_remote_code": trust_remote_code,
+        }
+        if device_map is not None:
+            load_kwargs["device_map"] = device_map
+        self.model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
+        if device_map is None:
+            self.model = self.model.to(device)
         self.model.eval()
         for p in self.model.parameters():
             p.requires_grad_(False)
 
-        self.device = device
+        # With device_map the model may live on several devices; route inputs to
+        # the embedding device.
+        self.device = (
+            device if device_map is None else str(self.model.get_input_embeddings().weight.device)
+        )
+        self.use_chat_template = use_chat_template and (
+            self.tokenizer.chat_template is not None
+        )
         self.vocab_size = int(self.model.config.vocab_size)
         self.hidden_size = int(self.model.config.hidden_size)
         self.eos_token_id = self.tokenizer.eos_token_id
         pad = self.tokenizer.pad_token_id
         self.pad_token_id = pad if pad is not None else self.eos_token_id
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         # Left-pad so the last position aligns across branches after prefill.
         self.tokenizer.padding_side = "left"
 
+    def _render(self, text: str) -> str:
+        """Apply the chat template to one branch text when enabled."""
+        if not self.use_chat_template:
+            return text
+        messages = [{"role": "user", "content": text}]
+        return self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+
     @torch.no_grad()
     def start(self, branch_texts: dict[str, str]) -> tuple[Any, StepOutput]:
-        texts = [branch_texts[name] for name in BRANCH_ORDER]
+        texts = [self._render(branch_texts[name]) for name in BRANCH_ORDER]
         enc = self.tokenizer(
             texts, return_tensors="pt", padding=True
         ).to(self.device)

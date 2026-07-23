@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import math
 import os
+import random
 from dataclasses import dataclass, field
+from typing import Iterable, Sequence
 
 import torch
 from torch.optim import AdamW
@@ -26,6 +28,7 @@ from .config import Config
 from .decoder import Rollout, generate
 from .glossary import Glossary
 from .llm_backend import LLMBackend
+from .logging_utils import TensorBoardLogger
 from .policy import WeightPolicy
 from .rewards import (
     FaithfulnessModel,
@@ -148,8 +151,10 @@ class SCSTTrainer:
             breakdowns.append(bd)
         return rollouts, breakdowns, active_terms
 
-    def _greedy_reward(self, example: Example, active_terms: list[str]) -> float:
+    def _greedy_score(self, example: Example) -> tuple[Rollout, RewardBreakdown]:
+        """Greedy (deterministic) generation + reward, no gradient."""
         active = self.glossary.gate(example.source) if self.glossary else []
+        active_terms = [a.term for a in active]
         branch_texts = build_branches(example, active).as_dict()
         with torch.no_grad():
             r = generate(
@@ -164,6 +169,10 @@ class SCSTTrainer:
             faithfulness_model=self.faithfulness_model,
             summary_length=r.length,
         )
+        return r, bd
+
+    def _greedy_reward(self, example: Example, active_terms: list[str]) -> float:
+        _, bd = self._greedy_score(example)
         return bd.total
 
     def compute_loss(self, example: Example) -> tuple[torch.Tensor, dict]:
@@ -283,3 +292,112 @@ class SCSTTrainer:
             self.best_reward = mean_reward
             return True
         return False
+
+    # -- evaluation ---------------------------------------------------------
+
+    @torch.no_grad()
+    def evaluate(self, dataset: Sequence[Example]) -> dict[str, float]:
+        """Greedy-decode the dataset and average reward components.
+
+        Used for the periodic validation hook (Section 2.5.9) to watch for
+        collapse/over-fitting. Returns a dict of mean metrics.
+        """
+        was_training = self.policy.training
+        self.policy.eval()
+        agg = {
+            "mean_reward": 0.0, "faithfulness": 0.0, "coverage": 0.0,
+            "term_usage": 0.0, "length_penalty": 0.0, "mean_len": 0.0,
+        }
+        n = 0
+        for example in dataset:
+            rollout, bd = self._greedy_score(example)
+            agg["mean_reward"] += bd.total
+            agg["faithfulness"] += bd.faithfulness
+            agg["coverage"] += bd.coverage
+            agg["term_usage"] += bd.term_usage
+            agg["length_penalty"] += bd.length_penalty
+            agg["mean_len"] += rollout.length
+            n += 1
+        if was_training:
+            self.policy.train()
+        if n == 0:
+            return agg
+        return {k: v / n for k, v in agg.items()}
+
+    # -- high-level training driver ----------------------------------------
+
+    def _batch_iterator(
+        self, dataset: Sequence[Example], total_steps: int
+    ) -> Iterable[list[Example]]:
+        """Yield `total_steps` micro-batches of size grad_accum_steps.
+
+        Cycles the dataset with a seeded shuffle each pass for reproducibility.
+        """
+        accum = self.config.train.grad_accum_steps
+        rng = random.Random(self.config.train.seed)
+        order: list[int] = []
+
+        def refill() -> None:
+            idx = list(range(len(dataset)))
+            rng.shuffle(idx)
+            order.extend(idx)
+
+        for _ in range(total_steps):
+            batch = []
+            for _ in range(accum):
+                if not order:
+                    refill()
+                batch.append(dataset[order.pop(0)])
+            yield batch
+
+    def fit(
+        self,
+        dataset: Sequence[Example],
+        *,
+        logger: TensorBoardLogger | None = None,
+        val_dataset: Sequence[Example] | None = None,
+        eval_every: int = 0,
+        log_every: int = 1,
+        print_every: int = 10,
+        max_steps: int | None = None,
+    ) -> None:
+        """Run the SCST training loop with logging, eval, and checkpointing."""
+        t = self.config.train
+        total_steps = max_steps if max_steps is not None else t.total_steps
+
+        for batch in self._batch_iterator(dataset, total_steps):
+            metrics = self.train_step(batch)
+            step = metrics.step
+
+            if logger is not None and step % max(1, log_every) == 0:
+                logger.log_metrics(metrics)
+
+            if print_every and step % print_every == 0:
+                print(
+                    f"step {step:>5} | loss {metrics.loss:8.3f} | "
+                    f"R {metrics.mean_reward:6.3f} | faith {metrics.faithfulness:.3f} "
+                    f"cov {metrics.coverage:.3f} term {metrics.term_usage:.3f} | "
+                    f"a{metrics.weight_a:.2f} b{metrics.weight_b:.2f} "
+                    f"c{metrics.weight_c:.2f} d{metrics.weight_d:.2f} | "
+                    f"gnorm {metrics.grad_norm:.2f} lr {metrics.lr:.2e}"
+                )
+
+            is_best = self.maybe_update_best(metrics.mean_reward)
+
+            if val_dataset is not None and eval_every and step % eval_every == 0:
+                ev = self.evaluate(val_dataset)
+                if logger is not None:
+                    logger.log_eval(step, ev)
+                print(f"  [eval @ {step}] " + " ".join(f"{k}={v:.3f}" for k, v in ev.items()))
+
+            if t.save_every and step % t.save_every == 0:
+                self.save_checkpoint(
+                    os.path.join(t.ckpt_dir, f"step_{step}.pt"), is_best=is_best
+                )
+            elif is_best:
+                self.save_checkpoint(
+                    os.path.join(t.ckpt_dir, "best.pt"), is_best=False
+                )
+
+        if logger is not None:
+            logger.flush()

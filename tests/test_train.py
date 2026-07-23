@@ -131,3 +131,53 @@ def test_maybe_update_best():
     assert trainer.maybe_update_best(1.0) is True
     assert trainer.maybe_update_best(0.5) is False
     assert trainer.maybe_update_best(2.0) is True
+
+
+def test_evaluate_returns_metrics_in_range():
+    cfg = _config()
+    trainer = _trainer(cfg)
+    ev = trainer.evaluate([_example(), _example()])
+    for key in ("mean_reward", "faithfulness", "coverage", "term_usage", "mean_len"):
+        assert key in ev
+    assert 0.0 <= ev["faithfulness"] <= 1.0
+    assert 0.0 <= ev["coverage"] <= 1.0
+    assert ev["mean_len"] >= 0
+
+
+def test_evaluate_empty_dataset():
+    cfg = _config()
+    trainer = _trainer(cfg)
+    ev = trainer.evaluate([])
+    assert ev["mean_reward"] == 0.0
+
+
+def test_batch_iterator_yields_expected_shape():
+    cfg = _config()
+    cfg.train.grad_accum_steps = 2
+    trainer = _trainer(cfg)
+    batches = list(trainer._batch_iterator([_example(), _example(), _example()], total_steps=4))
+    assert len(batches) == 4
+    assert all(len(b) == 2 for b in batches)
+
+
+def test_fit_runs_and_checkpoints(tmp_path):
+    cfg = _config()
+    cfg.train.total_steps = 3
+    cfg.train.save_every = 2
+    cfg.train.ckpt_dir = str(tmp_path)
+    trainer = _trainer(cfg)
+
+    from summarize_rl.logging_utils import TensorBoardLogger
+
+    logger = TensorBoardLogger(str(tmp_path / "tb"), enabled=False)
+    trainer.fit(
+        [_example(), _example()],
+        logger=logger,
+        val_dataset=[_example()],
+        eval_every=2,
+        print_every=0,
+        max_steps=3,
+    )
+    assert trainer._global_step == 3
+    # save_every=2 -> a step_2 checkpoint exists
+    assert os.path.exists(os.path.join(str(tmp_path), "step_2.pt"))

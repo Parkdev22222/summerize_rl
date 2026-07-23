@@ -1,4 +1,10 @@
 torch>=2.1
-# Optional: only needed for HFBackend (real backbone LLM). The core library,
+# TensorBoard live monitoring (SummaryWriter). Core training still runs without
+# it — the logger degrades to a no-op if missing.
+tensorboard>=2.10
+# Only needed for HFBackend (real backbone LLM, e.g. EXAONE). The core library,
 # MockBackend, and unit tests run on torch alone.
 transformers>=4.40
+# EXAONE ships custom modeling code (trust_remote_code) and multi-GPU sharding
+# via device_map="auto" needs accelerate.
+accelerate>=0.26
