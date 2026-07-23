@@ -122,6 +122,9 @@ def main() -> None:
     p.add_argument("--glossary", default=None, help="JSON {term: [triggers]}; omit for demo glossary")
     p.add_argument("--device", default="cuda", help="cuda | cuda:0 | cpu")
     p.add_argument("--dtype", default="bfloat16", help="backbone dtype (bfloat16/float16/float32)")
+    p.add_argument("--attn", default="sdpa",
+                   choices=["sdpa", "flash_attention_2", "eager"],
+                   help="attention kernel (sdpa=safe fast default; flash_attention_2 fastest, needs flash-attn)")
     p.add_argument("--query", default=DEFAULT_QUERY, help="default summarization instruction")
     p.add_argument("--max-new-tokens", type=int, default=None)
     p.add_argument("--min-new-tokens", type=int, default=None)
@@ -137,6 +140,7 @@ def main() -> None:
             glossary=glossary,
             device=args.device,
             dtype=args.dtype,
+            attn_implementation=args.attn,
             max_new_tokens=args.max_new_tokens,
             min_new_tokens=args.min_new_tokens,
         )
@@ -147,7 +151,8 @@ def main() -> None:
     server = HTTPServer((args.host, args.port), make_handler(service))
     print(
         f"serving on http://{args.host}:{args.port}  "
-        f"model={args.model} device={args.device} ckpt={args.ckpt} (step={step})"
+        f"model={args.model} device={args.device} attn={summarizer.backend.attn_implementation} "
+        f"ckpt={args.ckpt} (step={step})"
     )
     print("endpoints: GET /health | POST /summarize {source, query?} | POST /reload {ckpt}")
     print("stop with Ctrl-C")

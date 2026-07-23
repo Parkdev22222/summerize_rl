@@ -169,6 +169,24 @@ uv run python -m examples.summarize_client --server http://127.0.0.1:8000
 엔드포인트: `GET /health`, `POST /summarize {source, query?}`, `POST /reload {ckpt}`.
 클라이언트 명령어는 REPL과 동일(`:query`, `:ckpt`, `:help`, `:q`).
 
+### 추론 속도 — 어텐션 커널
+
+vLLM 엔진은 이 4갈래 PMI 디코딩을 못 돌리지만, 융합 어텐션 커널은 그대로 쓸 수 있다.
+`serve.py`/`summarize.py`의 `--attn`으로 선택한다(수치 동일, 품질 영향 없음):
+
+- `sdpa` (기본): torch SDPA, 어디서나 안전하게 빠름.
+- `flash_attention_2`: 가장 빠름. `flash-attn` 설치 필요(없으면 자동으로 `sdpa`→`eager` 폴백).
+- `eager`: 폴백/디버그용.
+
+```bash
+CUDA_VISIBLE_DEVICES=3 uv run python -m examples.serve \
+    --model <model> --ckpt checkpoints/best.pt --attn flash_attention_2
+```
+
+> 더 큰 가속(양자화 4-bit/AWQ, `torch.compile`+StaticCache로 CUDA graph화, 요청 연속
+> 배칭)도 가능하다. 특히 양자화는 정책망이 bf16 백본으로 학습됐으므로 요약이 달라질 수
+> 있어 A/B 검증이 필요하다.
+
 ## 설계상 보장
 
 - **LLM frozen**: `combine_logits`가 LLM 로짓을 detach → 그래디언트가 백본에 흐르지

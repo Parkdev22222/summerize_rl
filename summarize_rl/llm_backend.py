@@ -150,14 +150,22 @@ class HFBackend(LLMBackend):
         model_name: str,
         device: str = "cpu",
         dtype: str = "float32",
+        attn_implementation: str | None = None,
     ):
+        """attn_implementation: None (transformers default) | "sdpa" |
+        "flash_attention_2" | "eager". A fused kernel (sdpa/flash_attention_2)
+        speeds up the forward pass with identical math. If the requested kernel
+        is unavailable it falls back (flash_attention_2 -> sdpa -> eager) with a
+        notice, so this never hard-fails on a machine without flash-attn.
+        """
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         torch_dtype = getattr(torch, dtype)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name, dtype=torch_dtype, output_hidden_states=True
-        ).to(device)
+        self.model, self.attn_implementation = self._load_model(
+            AutoModelForCausalLM, model_name, torch_dtype, attn_implementation
+        )
+        self.model = self.model.to(device)
         self.model.eval()
         for p in self.model.parameters():
             p.requires_grad_(False)
@@ -170,6 +178,36 @@ class HFBackend(LLMBackend):
         self.pad_token_id = pad if pad is not None else self.eos_token_id
         # Left-pad so the last position aligns across branches after prefill.
         self.tokenizer.padding_side = "left"
+
+    @staticmethod
+    def _attn_fallback_chain(requested: str | None) -> list[str | None]:
+        """Ordered kernels to try: requested first, then safe fallbacks."""
+        if requested == "flash_attention_2":
+            return ["flash_attention_2", "sdpa", "eager"]
+        if requested == "sdpa":
+            return ["sdpa", "eager"]
+        return [requested]  # None (transformers default) or explicit "eager"
+
+    @classmethod
+    def _load_model(cls, auto_cls, model_name, torch_dtype, attn_implementation):
+        """Load the causal LM, honoring attn_implementation with fallback.
+
+        Returns (model, resolved_impl). ``resolved_impl`` is the kernel actually
+        used (may differ from requested if it fell back).
+        """
+        last_err: Exception | None = None
+        chain = cls._attn_fallback_chain(attn_implementation)
+        for impl in chain:
+            kwargs: dict = {"dtype": torch_dtype, "output_hidden_states": True}
+            if impl is not None:
+                kwargs["attn_implementation"] = impl
+            try:
+                return auto_cls.from_pretrained(model_name, **kwargs), impl
+            except (ImportError, ValueError) as e:
+                last_err = e
+                if impl != chain[-1]:
+                    print(f"[warn] attn_implementation={impl} 사용 불가 ({e}); 폴백")
+        raise last_err  # type: ignore[misc]
 
     @torch.no_grad()
     def start(self, branch_texts: dict[str, str]) -> tuple[Any, StepOutput]:
