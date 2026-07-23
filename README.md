@@ -35,6 +35,8 @@ pip install transformers     # 실제 백본(HFBackend) 사용 시에만
 | `policy.py` | 가중치 정책망 MLP: 특징 → `[a,b,c,d]`, sigmoid/softmax 제약, fp32, warm-start |
 | `glossary.py` | 용어사전 게이팅: `표준용어 ← 트리거`, 원문 등장 시만 활성 |
 | `branches.py` | 4갈래 프롬프트 구성 + triplet 직렬화 |
+| `triplets.py` | 구조화 보고서(`### 섹션` / `- **필드:** 값`)에서 triplet 규칙 추출 |
+| `data.py` | JSONL 코퍼스 로더: 레코드 → `Example`(triplet 추출·train/eval 분할) |
 | `llm_backend.py` | frozen LLM 래퍼. `MockBackend`(테스트용) / `HFBackend`(실모델) |
 | `decoder.py` | 다갈래 PMI 결합식 + 샘플링/greedy 디코딩 |
 | `rewards.py` | Faithfulness · TripletCoverage · TermUsage · LengthPenalty + 정규화 |
@@ -49,6 +51,36 @@ python -m examples.run_demo --steps 20
 
 `MockBackend`로 전체 파이프라인(게이팅 → 4갈래 → PMI 디코딩 → 보상 → advantage →
 정책 갱신)을 CPU에서 실행하고 스텝별 보상·가중치·grad 노름을 출력한다.
+
+## 데이터 (군사 시나리오 코퍼스)
+
+`data/military_scenarios.jsonl` (150건, `train` 140 / `eval` 10). 각 레코드:
+
+| 필드 | 의미 |
+|---|---|
+| `source_text` | 원문 보고서 X (구조화된 영어 시나리오) |
+| `summary_text` | 정답 요약(한국어) — **학습에는 안 씀**(reference-free), 평가용으로만 보관 |
+| `keyfacts` | 원자 사실 리스트(한국어) — 평가/분석용 |
+| `split` | `train` / `eval` |
+
+정답 triplet은 코퍼스에 없으므로 `triplets.py`가 `source_text`의 구조
+(`### 섹션` → `#### 하위섹션` → `- **필드:** 값` / 번호목록 / 일반 불릿)를 훑어
+규칙 기반으로 추출한다. 결정적·무의존(LLM/파서 불필요)이라 같은 원문은 항상 같은
+triplet을 낸다. 이렇게 뽑은 triplet이 SQ(핵심정보) 갈래를 채운다.
+
+```python
+from summarize_rl.data import load_examples
+corpus = load_examples()                 # data/military_scenarios.jsonl 기본
+print(len(corpus.train), len(corpus.eval))   # 140 10
+ex = corpus.train[0]
+print(ex.triplets)      # source_text에서 추출된 triplet
+print(ex.reference)     # summary_text (평가용, 보상엔 미사용)
+```
+
+> 참고: 원문은 영어, 요약은 한국어다. 현재 lexical 보상(`Faithfulness`/`Coverage`)은
+> 문자열 겹침 기반이라 교차언어에서는 약하다. 실전에서는 다국어 NLI/FactKB를
+> `FaithfulnessModel`로 주입하거나 `keyfacts`(한국어) 기반 커버리지로 교체하는 것을
+> 권장한다.
 
 ## 실제 백본 학습 (EXAONE) + TensorBoard
 
@@ -154,5 +186,6 @@ python -m pytest tests/ -q
 
 ## 이번 범위 밖 (의존성)
 
-실제 백본 선정/다운로드, 실제 코퍼스·용어사전 구축, vLLM 롤아웃 통합, 대규모 학습 실행.
+실제 백본 다운로드/대규모 학습 실행, 실전 군사 용어사전 구축, 다국어 NLI/FactKB
+보상, vLLM 롤아웃 통합. (군사 시나리오 코퍼스는 `data/`에 포함되어 연결됨.)
 설계 문서: `docs/superpowers/specs/2026-07-22-pmi-weight-rl-design.md`.

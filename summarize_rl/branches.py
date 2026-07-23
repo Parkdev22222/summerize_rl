@@ -27,11 +27,20 @@ class Triplet:
 
 @dataclass
 class Example:
-    """One summarization input."""
+    """One summarization input.
+
+    `reference` and `keyfacts` are optional metadata (a gold summary and its
+    atomic key facts). Training is reference-free and never reads them; they are
+    carried only so evaluation/analysis can compare against a reference when the
+    corpus provides one.
+    """
 
     source: str  # X: concatenated child-node source text
     triplets: list[Triplet] = field(default_factory=list)
     query: str = "다음 내용을 군사 표준용어를 사용하여 요약하시오."
+    reference: str | None = None  # gold summary (eval only, not used in reward)
+    keyfacts: list[str] = field(default_factory=list)  # atomic facts (eval only)
+    id: int | None = None  # source record id, if any
 
 
 @dataclass

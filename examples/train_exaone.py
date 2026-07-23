@@ -18,8 +18,9 @@ Notes on EXAONE:
     summarization, LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct is usually a better fit;
     pass it with --model.
 
-This script uses the small synthetic corpus/glossary in examples.sample_data as
-a placeholder. Swap `load_dataset()` for the real KG source/triplet loader.
+This script loads data/military_scenarios.jsonl by default (override with
+--data). Each record's triplets are extracted from source_text at load time
+(see summarize_rl.triplets); the gold summary_text is kept for eval only.
 """
 
 from __future__ import annotations
@@ -48,17 +49,18 @@ def _select_visible_gpus(gpu_ids: str | None, num_gpus: int | None) -> int | Non
 # NOTE: heavy imports (torch/transformers) happen inside main() AFTER GPU pinning.
 
 
-def load_dataset():
-    """Placeholder: return (train_examples, val_examples).
+def load_dataset(path: str | None = None):
+    """Return (train_examples, val_examples) from the military scenario corpus.
 
-    Replace with the real corpus loader. Here we reuse the synthetic examples
-    and hold out one for validation.
+    Reads data/military_scenarios.jsonl by default, splitting on each record's
+    `split` field. Triplets are extracted from `source_text` at load time; the
+    gold `summary_text` is carried only for eval (training is reference-free).
     """
-    from examples.sample_data import EXAMPLES
+    from summarize_rl.data import load_examples
 
-    train = EXAMPLES
-    val = EXAMPLES[:1]
-    return train, val
+    corpus = load_examples(path)
+    val = corpus.eval or corpus.train[:1]
+    return corpus.train, val
 
 
 def build_config(args):
@@ -109,6 +111,9 @@ def main() -> None:
     p.add_argument("--top-p", type=float, default=0.95)
 
     p.add_argument("--hidden-dim", type=int, default=512)
+    p.add_argument("--data", default=None,
+                   help="path to the JSONL corpus "
+                        "(default: data/military_scenarios.jsonl)")
     p.add_argument("--log-dir", default="runs/exaone")
     p.add_argument("--ckpt-dir", default="checkpoints/exaone")
     p.add_argument("--save-every", type=int, default=200)
@@ -159,7 +164,8 @@ def main() -> None:
         policy, backend, cfg, glossary=MILITARY_GLOSSARY, generator=generator
     )
 
-    train_data, val_data = load_dataset()
+    train_data, val_data = load_dataset(args.data)
+    print(f"Loaded corpus: {len(train_data)} train / {len(val_data)} eval examples")
     logger = TensorBoardLogger(args.log_dir, enabled=True)
     print(f"TensorBoard logging -> {args.log_dir}  (tensorboard --logdir {args.log_dir})")
 
