@@ -19,6 +19,10 @@ logit_c = (1 + a) · (b·logit_XQ + c·logit_SQ + d·logit_GQ) − a·logit_Q
 
 - `XQ` 원문+질의 · `SQ` triplet+질의 · `GQ` 게이팅 용어사전+질의 · `Q` 질의(prior)
 - **LLM은 frozen** — 로짓/hidden만 제공. 그래디언트는 정책망 θ에만 흐른다.
+- **prior 제거 강도 `a`는 기본적으로 `0.5`로 고정**하고 `b,c,d`(원문/triplet/용어 혼합)만
+  학습한다(대조 디코딩 관례 · RL 안정화). 토큰별로 `a`까지 학습하려면
+  `PolicyConfig(learn_a=True)`, 고정값은 `fixed_a`로 바꾼다. 학습·추론 config가 일치해야
+  결과가 재현된다(head는 항상 4폭이라 체크포인트는 양쪽에서 로드됨).
 
 ## 설치
 
