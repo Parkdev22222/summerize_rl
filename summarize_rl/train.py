@@ -7,7 +7,7 @@ detached inside the decoder, so gradients cannot reach it. The loop:
   2. reference-free reward per rollout.
   3. self-critical baseline b (mean of the N rewards, or greedy reward).
   4. advantage A_i = R~_i - b.
-  5. loss = -(1/N) sum_i A_i * sum_t (mask_t * logpi_t)   (- beta * entropy).
+  5. loss = -(1/N) sum_i A_i * mean_t(logpi_t)   (- beta * entropy).
   6. AdamW step with grad clipping and accumulation.
 """
 
@@ -185,7 +185,10 @@ class SCSTTrainer:
 
         loss = torch.zeros((), dtype=torch.float32)
         for adv, rollout in zip(advantages, rollouts):
-            loss = loss - adv * rollout.sum_logp()
+            # Length-normalize the sequence log-probability so longer
+            # rollouts do not produce disproportionately large loss values.
+            mean_logp = rollout.sum_logp() / max(rollout.length, 1)
+            loss = loss - adv * mean_logp
         loss = loss / len(rollouts)
 
         entropy = torch.stack([r.mean_entropy() for r in rollouts]).mean()
