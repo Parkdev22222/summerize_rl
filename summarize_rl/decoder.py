@@ -175,3 +175,45 @@ def generate(
 
     rollout.text = backend.decode(rollout.token_ids)
     return rollout
+
+
+@dataclass
+class ScoredSequence:
+    """Per-token log-probs and entropies of a fixed token sequence."""
+
+    logps: list[torch.Tensor] = field(default_factory=list)  # scalar, grad-carrying
+    entropies: list[torch.Tensor] = field(default_factory=list)
+
+
+def score_tokens(
+    backend: LLMBackend,
+    branch_texts: dict[str, str],
+    policy: WeightPolicy,
+    token_ids: list[int],
+    config: DecodeConfig,
+) -> ScoredSequence:
+    """Teacher-forced re-scoring of a FIXED token sequence under `policy`.
+
+    Recomputes each token's log-probability from the current policy weights,
+    using the full temperature-scaled softmax (no nucleus truncation) so that
+    importance ratios pi_theta / pi_theta_old are well defined. The same
+    min_new_tokens EOS masking as sampling is applied so the distribution
+    matches the one the tokens were drawn from. Used by GRPO to recompute the
+    ratio (current policy) and the KL reference (frozen policy).
+    """
+    use_contrast = policy.config.use_contrast_features
+    eos = config.eos_token_id if config.eos_token_id is not None else backend.eos_token_id
+
+    state, step = backend.start(branch_texts)
+    scored = ScoredSequence()
+    for t, token in enumerate(token_ids):
+        weights = policy(_branch_hidden(step).as_features(use_contrast))
+        combined = combine_logits(step, weights)
+        if eos is not None and t < config.min_new_tokens:
+            combined = combined.clone()
+            combined[eos] = float("-inf")
+        scaled = combined / max(config.temperature, 1e-6)
+        scored.logps.append(F.log_softmax(scaled, dim=-1)[token])
+        scored.entropies.append(policy.entropy(weights).squeeze(0))
+        step = backend.step(state, token)
+    return scored

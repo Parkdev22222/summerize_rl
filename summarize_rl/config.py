@@ -84,6 +84,23 @@ class TrainConfig:
 
 
 @dataclass
+class GRPOConfig:
+    """Group Relative Policy Optimization loop.
+
+    Reuses TrainConfig for the optimizer/schedule (lr, betas, warmup,
+    total_steps, grad_clip, grad_accum_steps, seed); the fields here are the
+    GRPO-specific knobs that replace the SCST baseline/reward-norm settings.
+    """
+
+    group_size: int = 8  # G: rollouts per prompt; advantage normalized within
+    clip_eps: float = 0.2  # PPO clip epsilon on the importance ratio
+    kl_beta: float = 0.04  # KL-to-reference coefficient (DeepSeek default)
+    inner_epochs: int = 2  # mu: gradient updates per sampled group (>1 uses clip)
+    adv_eps: float = 1e-6  # std stabilizer for group-normalized advantage
+    entropy_beta: float = 0.0  # optional entropy bonus (GRPO leans on KL instead)
+
+
+@dataclass
 class Config:
     """Top-level bundle."""
 
@@ -91,3 +108,4 @@ class Config:
     decode: DecodeConfig = field(default_factory=DecodeConfig)
     reward: RewardConfig = field(default_factory=RewardConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
+    grpo: GRPOConfig = field(default_factory=GRPOConfig)
