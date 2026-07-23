@@ -71,6 +71,22 @@ def test_compute_reward_weighted_sum():
     assert math.isclose(r.total, expected, rel_tol=1e-6)
 
 
+def test_contrast_term_enters_total():
+    cfg = RewardConfig(
+        w_faithfulness=1.0, w_coverage=1.0, w_term=0.5, w_contrast=0.5, w_length=0.2
+    )
+    triplets = [Triplet("적", "행동", "이동")]
+    kwargs = dict(
+        summary="적이 이동했다", source="적이 이동했다", triplets=triplets,
+        active_terms=["기동"], config=cfg,
+    )
+    base = compute_reward(contrast=0.0, **kwargs)
+    withc = compute_reward(contrast=2.0, **kwargs)
+    assert math.isclose(withc.contrast, 2.0, rel_tol=1e-9)
+    # total gains exactly w_contrast * contrast
+    assert math.isclose(withc.total - base.total, 0.5 * 2.0, rel_tol=1e-6)
+
+
 def test_pluggable_faithfulness_model():
     class Always:
         def __init__(self, v):

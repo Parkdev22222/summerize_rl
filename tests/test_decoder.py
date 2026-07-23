@@ -1,9 +1,25 @@
 import torch
 
 from summarize_rl.config import DecodeConfig, PolicyConfig
-from summarize_rl.decoder import combine_logits, generate, _top_p_mask
+from summarize_rl.decoder import combine_logits, generate, pmi_contrast, _top_p_mask
 from summarize_rl.llm_backend import MockBackend, StepOutput
 from summarize_rl.policy import WeightPolicy, Weights
+
+
+def test_pmi_contrast_sign():
+    # Token 0 is favored by the source branches (XQ/SQ/GQ) over the prior Q;
+    # token 2 is favored by the prior. PMI must be positive for the former.
+    logits = torch.tensor(
+        [
+            [5.0, 0.0, 0.0],  # XQ
+            [5.0, 0.0, 0.0],  # SQ
+            [5.0, 0.0, 0.0],  # GQ
+            [0.0, 0.0, 5.0],  # Q (prior)
+        ]
+    )
+    step = StepOutput(logits=logits, hidden=torch.zeros(4, 2))
+    assert pmi_contrast(step, 0) > 0.0  # source-specific token
+    assert pmi_contrast(step, 2) < 0.0  # prior-driven token
 
 
 def _weights(a, b, c, d):

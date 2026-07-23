@@ -55,6 +55,7 @@ class RewardConfig:
     w_faithfulness: float = 1.0
     w_coverage: float = 1.0
     w_term: float = 0.5
+    w_contrast: float = 0.5  # PMI contrast (source vs. prior); trains weight `a`
     w_length: float = 0.2
     target_length: int = 120  # tokens; overage penalized
     repeat_ngram: int = 3  # n-gram size for repetition penalty

@@ -29,12 +29,25 @@ class Rollout:
     logps: list[torch.Tensor] = field(default_factory=list)  # scalar, grad-carrying
     entropies: list[torch.Tensor] = field(default_factory=list)
     weight_trace: list[tuple[float, float, float, float]] = field(default_factory=list)
+    contrasts: list[float] = field(default_factory=list)  # per-token PMI, reward-only
     text: str = ""
     hit_eos: bool = False
 
     @property
     def length(self) -> int:
         return len(self.token_ids)
+
+    def mean_contrast(self) -> float:
+        """Mean per-token PMI contrast (source-conditioned vs. prior).
+
+        A reward-side scalar (no gradient): how much the chosen tokens are
+        favored by the source/core/term branches over the query prior Q. This
+        is exactly the effect the prior-removal weight `a` modulates, so it
+        gives `a` a learning signal the text-only reward terms cannot.
+        """
+        if not self.contrasts:
+            return 0.0
+        return sum(self.contrasts) / len(self.contrasts)
 
     def sum_logp(self) -> torch.Tensor:
         if not self.logps:
@@ -59,6 +72,26 @@ def combine_logits(step: StepOutput, weights: Weights) -> torch.Tensor:
     a, b, c, d = weights.a, weights.b, weights.c, weights.d  # each [1]
     positive = b * xq + c * sq + d * gq
     return (1 + a) * positive - a * q  # [V]
+
+
+def pmi_contrast(step: StepOutput, token: int) -> float:
+    """Pointwise mutual information of `token`: source-conditioned vs. prior.
+
+    Compares a policy-free uniform mixture of the source/core/term branches
+    (XQ, SQ, GQ) against the query-only prior branch Q:
+
+        pmi = log softmax(mean(XQ, SQ, GQ))[token] - log softmax(Q)[token]
+
+    Positive when the chosen token is more probable given the source context
+    than under the generic prior. Policy-independent (does not use a/b/c/d) so
+    it is a stable reward measure; returned as a plain float (no gradient).
+    """
+    logits = step.logits.detach()
+    positive = (logits[0] + logits[1] + logits[2]) / 3.0
+    q = logits[3]
+    lp_pos = F.log_softmax(positive, dim=-1)
+    lp_q = F.log_softmax(q, dim=-1)
+    return float((lp_pos[token] - lp_q[token]).item())
 
 
 def _top_p_mask(logits: torch.Tensor, top_p: float) -> torch.Tensor:
@@ -124,6 +157,7 @@ def generate(
         rollout.token_ids.append(token)
         rollout.logps.append(logp)
         rollout.entropies.append(policy.entropy(weights).squeeze(0))
+        rollout.contrasts.append(pmi_contrast(step, token))
         rollout.weight_trace.append(
             (
                 float(weights.a.item()),

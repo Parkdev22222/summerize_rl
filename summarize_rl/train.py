@@ -78,6 +78,7 @@ class StepMetrics:
     faithfulness: float
     coverage: float
     term_usage: float
+    contrast: float
     length_penalty: float
     mean_len: float
     weight_a: float
@@ -149,6 +150,7 @@ class SCSTTrainer:
                 config=self.config.reward,
                 faithfulness_model=self.faithfulness_model,
                 summary_length=r.length,
+                contrast=r.mean_contrast(),
             )
             rollouts.append(r)
             breakdowns.append(bd)
@@ -169,6 +171,7 @@ class SCSTTrainer:
             config=self.config.reward,
             faithfulness_model=self.faithfulness_model,
             summary_length=r.length,
+            contrast=r.mean_contrast(),
         )
         return bd.total
 
@@ -224,6 +227,7 @@ class SCSTTrainer:
             "faithfulness": sum(bd.faithfulness for bd in breakdowns) / k,
             "coverage": sum(bd.coverage for bd in breakdowns) / k,
             "term_usage": sum(bd.term_usage for bd in breakdowns) / k,
+            "contrast": sum(bd.contrast for bd in breakdowns) / k,
             "length_penalty": sum(bd.length_penalty for bd in breakdowns) / k,
             "mean_len": sum(r.length for r in rollouts) / len(rollouts),
             "weight_a": a,
@@ -264,7 +268,7 @@ class SCSTTrainer:
             lr=float(self.scheduler.get_last_lr()[0]),
             **{k: agg[k] for k in (
                 "mean_reward", "faithfulness", "coverage", "term_usage",
-                "length_penalty", "mean_len", "weight_a", "weight_b",
+                "contrast", "length_penalty", "mean_len", "weight_a", "weight_b",
                 "weight_c", "weight_d", "entropy",
             )},
         )
