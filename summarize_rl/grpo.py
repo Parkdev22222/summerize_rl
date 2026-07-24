@@ -52,6 +52,7 @@ class GRPOMetrics:
     term_usage: float
     contrast: float
     length_penalty: float
+    copy_penalty: float
     mean_len: float
     weight_a: float
     weight_b: float
@@ -239,6 +240,7 @@ class GRPOTrainer:
             "term_usage": sum(bd.term_usage for bd in breakdowns) / k,
             "contrast": sum(bd.contrast for bd in breakdowns) / k,
             "length_penalty": sum(bd.length_penalty for bd in breakdowns) / k,
+            "copy_penalty": sum(bd.copy_penalty for bd in breakdowns) / k,
             "mean_len": sum(r.length for r in rollouts) / len(rollouts),
             "weight_a": sum(w[0] for w in weights) / nw,
             "weight_b": sum(w[1] for w in weights) / nw,
@@ -288,8 +290,8 @@ class GRPOTrainer:
             entropy=last_stats["entropy"],
             **{k: reward_m[k] for k in (
                 "mean_reward", "faithfulness", "coverage", "term_usage",
-                "contrast", "length_penalty", "mean_len", "weight_a",
-                "weight_b", "weight_c", "weight_d",
+                "contrast", "length_penalty", "copy_penalty", "mean_len",
+                "weight_a", "weight_b", "weight_c", "weight_d",
             )},
         )
 

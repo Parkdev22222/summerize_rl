@@ -67,8 +67,10 @@ class RewardConfig:
     w_term: float = 0.5
     w_contrast: float = 0.5  # PMI contrast (source vs. prior); trains weight `a`
     w_length: float = 0.2
+    w_copy: float = 1.0  # penalty for verbatim source copying (anti-reward-hacking)
     target_length: int = 120  # tokens; overage penalized
     repeat_ngram: int = 3  # n-gram size for repetition penalty
+    copy_ngram: int = 4  # n-gram size for the extractive-copy penalty
     norm_eps: float = 1e-8
 
 
@@ -107,7 +109,7 @@ class GRPOConfig:
     kl_beta: float = 0.04  # KL-to-reference coefficient (DeepSeek default)
     inner_epochs: int = 2  # mu: gradient updates per sampled group (>1 uses clip)
     adv_eps: float = 1e-6  # std stabilizer for group-normalized advantage
-    entropy_beta: float = 0.0  # optional entropy bonus (GRPO leans on KL instead)
+    entropy_beta: float = 0.01  # entropy bonus on ALL weights; guards vs. collapse
 
 
 @dataclass

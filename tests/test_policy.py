@@ -125,6 +125,7 @@ def test_entropy_bounds():
     feats = _hidden(3, 8).as_features(cfg.use_contrast_features)
     w = policy(feats)
     ent = policy.entropy(w)
-    # entropy of 3-way categorical in [0, ln 3]
+    # [b,c,d] categorical entropy (<= ln 3) + Bernoulli(a) entropy (<= ln 2)
+    max_ent = torch.log(torch.tensor(3.0)) + torch.log(torch.tensor(2.0))
     assert torch.all(ent >= 0)
-    assert torch.all(ent <= torch.log(torch.tensor(3.0)) + 1e-5)
+    assert torch.all(ent <= max_ent + 1e-5)
