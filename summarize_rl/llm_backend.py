@@ -190,15 +190,17 @@ class HFBackend(LLMBackend):
         model_name: str,
         device: str = "cpu",
         dtype: str = "float32",
-        attn_implementation: str | None = "flash_attention_2",
+        attn_implementation: str | None = "sdpa",
         compile_decode: bool = False,
         max_seq_len: int = 2048,
     ):
         """attn_implementation: None (transformers default) | "sdpa" |
-        "flash_attention_2" | "eager". A fused kernel (sdpa/flash_attention_2)
-        speeds up the forward pass with identical math. If the requested kernel
-        is unavailable it falls back (flash_attention_2 -> sdpa -> eager) with a
-        notice, so this never hard-fails on a machine without flash-attn.
+        "flash_attention_2" | "eager". Default "sdpa" is built into PyTorch
+        (no extra install) and already dispatches to FlashAttention / memory-
+        efficient kernels on GPU, so it is fast with identical math. Pass
+        "flash_attention_2" only if the flash-attn package is installed. If the
+        requested kernel is unavailable it falls back (flash_attention_2 -> sdpa
+        -> eager) with a notice, so this never hard-fails.
 
         compile_decode: if True, decode with a fixed-size ``StaticCache`` and a
         ``torch.compile``d model so the single-token step has static shapes and
@@ -266,7 +268,7 @@ class HFBackend(LLMBackend):
             except (ImportError, ValueError) as e:
                 last_err = e
                 if impl != chain[-1]:
-                    print(f"[warn] attn_implementation={impl} 사용 불가 ({e}); 폴백")
+                    print(f"[info] attn_implementation={impl} 미설치/미지원 → 다음 커널로 폴백")
         raise last_err  # type: ignore[misc]
 
     def start(self, branch_texts: dict[str, str]) -> tuple[Any, StepOutput]:

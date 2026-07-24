@@ -84,8 +84,9 @@ def main() -> None:
     p.add_argument("--glossary", default=None, help="JSON {term: [triggers]}; omit for demo glossary")
     p.add_argument("--device", default="cuda", help="cuda | cuda:0 | cpu")
     p.add_argument("--dtype", default="bfloat16", help="backbone dtype (bfloat16/float16/float32)")
-    p.add_argument("--attn", default="flash_attention_2",
-                   help="attention kernel: flash_attention_2 | sdpa | eager (auto-falls back)")
+    p.add_argument("--attn", default="sdpa",
+                   help="attention kernel: sdpa (default, no install) | flash_attention_2 "
+                        "(needs flash-attn) | eager. Auto-falls back if unavailable.")
     p.add_argument("--compile-decode", dest="compile_decode", action="store_true", default=True,
                    help="compile the single-token decode step (StaticCache/CUDA graph). On by default.")
     p.add_argument("--no-compile-decode", dest="compile_decode", action="store_false",
