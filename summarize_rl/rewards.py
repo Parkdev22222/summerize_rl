@@ -33,10 +33,21 @@ from .branches import Triplet
 from .config import RewardConfig
 
 _TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+_WS_RE = re.compile(r"\s+")
 
 
 def tokenize(text: str) -> list[str]:
     return _TOKEN_RE.findall(text.lower())
+
+
+def _nospace(text: str) -> str:
+    """Lowercased text with all whitespace removed.
+
+    Korean surface forms space compound entities inconsistently: the KB may
+    store "블루포스" solid while a summary writes "블루 포스". Matching against
+    the space-stripped summary makes grounding robust to that split.
+    """
+    return _WS_RE.sub("", text.lower())
 
 
 class FaithfulnessModel(Protocol):
@@ -85,25 +96,46 @@ def _contains(summary_norm: str, phrase: str) -> bool:
     """True if every token of `phrase` appears (as substring) in the summary.
 
     Substring matching (rather than token-set equality) tolerates Korean
-    particle agglutination and multi-token entities/terms.
+    particle agglutination and multi-token entities/terms. Whitespace-insensitive
+    on the summary side so a solid KB form ("블루포스") matches a spaced summary
+    ("블루 포스").
     """
     toks = tokenize(phrase)
     if not toks:
         return False
-    return all(t in summary_norm for t in toks)
+    summ_ns = _nospace(summary_norm)
+    return all(t in summary_norm or t in summ_ns for t in toks)
 
 
 def triplet_coverage(summary: str, triplets: list[Triplet]) -> float:
-    """Fraction of head/tail entities that surface in the summary."""
-    entities = []
+    """Mean per-entity content-token recall over head/tail entities, in [0, 1].
+
+    Partial credit — the fraction of an entity's content tokens present —
+    rather than all-or-nothing. The KB tails in real data are long descriptive
+    phrases ("영토 방어 및 지역 안정", "제2기계화여단 1,500명"); requiring every
+    token verbatim made even a human gold summary score ~0.1-0.3, so coverage
+    stayed flat and carried no learning signal (the "fluent-but-off-topic"
+    failure). Matching is whitespace-insensitive; content tokens are >=2 chars
+    and not pure digits (single-char / number tokens match trivially). Entities
+    are deduped, and any with no scorable token are skipped.
+    """
+    entities: list[str] = []
     for t in triplets:
         entities.append(t.head)
         entities.append(t.tail)
     if not entities:
         return 1.0  # nothing to cover -> vacuously complete
+    entities = list(dict.fromkeys(entities))  # dedupe, preserve order
     summary_norm = summary.lower()
-    hit = sum(1 for e in entities if _contains(summary_norm, e))
-    return hit / len(entities)
+    summ_ns = _nospace(summary_norm)
+    scores: list[float] = []
+    for e in entities:
+        toks = [t for t in tokenize(e) if len(t) >= 2 and not t.isdigit()]
+        if not toks:
+            continue  # unscorable (single-char / pure-number entity)
+        hit = sum(1 for t in toks if t in summary_norm or t in summ_ns)
+        scores.append(hit / len(toks))
+    return sum(scores) / len(scores) if scores else 1.0
 
 
 def term_usage(summary: str, active_terms: list[str], source: str | None = None) -> float:
@@ -139,12 +171,13 @@ def key_sentence_coverage(summary: str, key_sentences: list[str]) -> float:
     if not key_sentences:
         return 1.0
     summary_norm = summary.lower()
+    summ_ns = _nospace(summary_norm)
     scores = []
     for sent in key_sentences:
         toks = [t for t in tokenize(sent) if len(t) >= 2]
         if not toks:
             continue
-        grounded = sum(1 for t in toks if t in summary_norm)
+        grounded = sum(1 for t in toks if t in summary_norm or t in summ_ns)
         scores.append(grounded / len(toks))
     return sum(scores) / len(scores) if scores else 1.0
 
