@@ -30,6 +30,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from .branches import Example, build_branches
 from .config import Config
 from .decoder import Rollout, generate, generate_batch
+from .keysent import KeySentenceExtractor
 from .glossary import Glossary
 from .llm_backend import LLMBackend
 from .policy import WeightPolicy
@@ -78,6 +79,7 @@ class StepMetrics:
     faithfulness: float
     coverage: float
     term_usage: float
+    key_sentence: float
     contrast: float
     length_penalty: float
     copy_penalty: float
@@ -108,6 +110,9 @@ class SCSTTrainer:
         self.glossary = glossary
         self.faithfulness_model = faithfulness_model
         self.generator = generator
+        self.key_extractor = (
+            KeySentenceExtractor(config.reward) if config.reward.w_keysent > 0 else None
+        )
 
         freeze_llm(backend)
 
@@ -132,6 +137,7 @@ class SCSTTrainer:
         active = self.glossary.gate(example.source) if self.glossary else []
         active_terms = [a.term for a in active]
         branch_texts = build_branches(example, active).as_dict()
+        key_sents = self._key_sentences(example)
 
         # All N rollouts share this prompt -> one batched forward (batch = N*4)
         # instead of N sequential decodes. The recorded log-probs carry grad, so
@@ -150,10 +156,17 @@ class SCSTTrainer:
                 faithfulness_model=self.faithfulness_model,
                 summary_length=r.length,
                 contrast=r.mean_contrast(),
+                key_sentences=key_sents,
             )
             for r in rollouts
         ]
         return rollouts, breakdowns, active_terms
+
+    def _key_sentences(self, example: Example) -> list[str] | None:
+        """LLM-extracted key sentences for this source (cached), or None if off."""
+        if self.key_extractor is None:
+            return None
+        return self.key_extractor.extract(self.backend, example.source)
 
     def _greedy_reward(self, example: Example, active_terms: list[str]) -> float:
         active = self.glossary.gate(example.source) if self.glossary else []
@@ -171,6 +184,7 @@ class SCSTTrainer:
             faithfulness_model=self.faithfulness_model,
             summary_length=r.length,
             contrast=r.mean_contrast(),
+            key_sentences=self._key_sentences(example),
         )
         return bd.total
 
@@ -226,6 +240,7 @@ class SCSTTrainer:
             "faithfulness": sum(bd.faithfulness for bd in breakdowns) / k,
             "coverage": sum(bd.coverage for bd in breakdowns) / k,
             "term_usage": sum(bd.term_usage for bd in breakdowns) / k,
+            "key_sentence": sum(bd.key_sentence for bd in breakdowns) / k,
             "contrast": sum(bd.contrast for bd in breakdowns) / k,
             "length_penalty": sum(bd.length_penalty for bd in breakdowns) / k,
             "copy_penalty": sum(bd.copy_penalty for bd in breakdowns) / k,
@@ -268,8 +283,9 @@ class SCSTTrainer:
             lr=float(self.scheduler.get_last_lr()[0]),
             **{k: agg[k] for k in (
                 "mean_reward", "faithfulness", "coverage", "term_usage",
-                "contrast", "length_penalty", "copy_penalty", "mean_len",
-                "weight_a", "weight_b", "weight_c", "weight_d", "entropy",
+                "key_sentence", "contrast", "length_penalty", "copy_penalty",
+                "mean_len", "weight_a", "weight_b", "weight_c", "weight_d",
+                "entropy",
             )},
         )
         return metrics

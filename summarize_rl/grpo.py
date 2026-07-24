@@ -36,6 +36,7 @@ from .branches import Example, build_branches
 from .config import Config
 from .decoder import Rollout, generate_batch, score_tokens_batch
 from .glossary import Glossary
+from .keysent import KeySentenceExtractor
 from .llm_backend import LLMBackend
 from .policy import WeightPolicy
 from .rewards import FaithfulnessModel, RewardBreakdown, compute_reward
@@ -50,6 +51,7 @@ class GRPOMetrics:
     faithfulness: float
     coverage: float
     term_usage: float
+    key_sentence: float
     contrast: float
     length_penalty: float
     copy_penalty: float
@@ -94,6 +96,9 @@ class GRPOTrainer:
         self.glossary = glossary
         self.faithfulness_model = faithfulness_model
         self.generator = generator
+        self.key_extractor = (
+            KeySentenceExtractor(config.reward) if config.reward.w_keysent > 0 else None
+        )
 
         freeze_llm(backend)
 
@@ -127,6 +132,10 @@ class GRPOTrainer:
         active = self.glossary.gate(example.source) if self.glossary else []
         active_terms = [a.term for a in active]
         branch_texts = build_branches(example, active).as_dict()
+        key_sents = (
+            self.key_extractor.extract(self.backend, example.source)
+            if self.key_extractor else None
+        )
 
         # Sampling and old/ref scoring run without gradient and without dropout.
         # All G rollouts share this prompt, so they are generated in one batched
@@ -147,6 +156,7 @@ class GRPOTrainer:
                     faithfulness_model=self.faithfulness_model,
                     summary_length=r.length,
                     contrast=r.mean_contrast(),
+                    key_sentences=key_sents,
                 )
                 for r in rollouts
             ]
@@ -237,6 +247,7 @@ class GRPOTrainer:
             "faithfulness": sum(bd.faithfulness for bd in breakdowns) / k,
             "coverage": sum(bd.coverage for bd in breakdowns) / k,
             "term_usage": sum(bd.term_usage for bd in breakdowns) / k,
+            "key_sentence": sum(bd.key_sentence for bd in breakdowns) / k,
             "contrast": sum(bd.contrast for bd in breakdowns) / k,
             "length_penalty": sum(bd.length_penalty for bd in breakdowns) / k,
             "copy_penalty": sum(bd.copy_penalty for bd in breakdowns) / k,
@@ -289,8 +300,8 @@ class GRPOTrainer:
             entropy=last_stats["entropy"],
             **{k: reward_m[k] for k in (
                 "mean_reward", "faithfulness", "coverage", "term_usage",
-                "contrast", "length_penalty", "copy_penalty", "mean_len",
-                "weight_a", "weight_b", "weight_c", "weight_d",
+                "key_sentence", "contrast", "length_penalty", "copy_penalty",
+                "mean_len", "weight_a", "weight_b", "weight_c", "weight_d",
             )},
         )
 

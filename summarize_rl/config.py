@@ -64,12 +64,18 @@ class RewardConfig:
     w_faithfulness: float = 1.0
     w_coverage: float = 2.0  # triplet-entity coverage: the main on-topic anchor
     w_term: float = 0.25  # standard-term use; low so generic term-dropping can't win
+    w_keysent: float = 1.0  # did the summary reflect the LLM-picked key sentences?
     w_contrast: float = 0.5  # PMI contrast (source vs. prior); trains weight `a`
     w_length: float = 0.2
     w_copy: float = 1.0  # penalty for verbatim source copying (anti-reward-hacking)
     target_length: int = 120  # tokens; overage penalized
     repeat_ngram: int = 3  # n-gram size for repetition penalty
     copy_ngram: int = 4  # n-gram size for the extractive-copy penalty
+    # Key-sentence extraction (used only when w_keysent > 0): the frozen LLM is
+    # prompted once per source to pick the N most important sentences; the
+    # summary is then rewarded for reflecting their content. Cached per source.
+    keysent_n: int = 3  # how many key sentences to ask the LLM for
+    keysent_max_new_tokens: int = 256  # generation budget for extraction
     norm_eps: float = 1e-8
 
 
