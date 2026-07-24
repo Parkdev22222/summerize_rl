@@ -101,6 +101,9 @@ def main() -> None:
     p.add_argument("--min-new-tokens", type=int, default=None)
     p.add_argument("--save-every", type=int, default=None)
     p.add_argument("--ckpt-dir", default="checkpoints")
+    p.add_argument("--balance-content", dest="balance_content", action="store_true", default=False,
+                   help="gate fluency terms (faith/term/contrast) by content recall (cov+keysent) "
+                        "to stop fluent-but-off-topic summaries from winning. Off by default.")
     p.add_argument("--query", default=None, help="override the instruction/query")
     p.add_argument("--limit", type=int, default=None, help="use only the first N examples (smoke)")
     p.add_argument("--seed", type=int, default=42)
@@ -141,6 +144,7 @@ def main() -> None:
         cfg.decode.max_new_tokens = args.max_new_tokens
     if args.min_new_tokens is not None:
         cfg.decode.min_new_tokens = args.min_new_tokens
+    cfg.reward.balance_content = args.balance_content
 
     # --- policy on the SAME device as the backbone (stays fp32) ----------
     # HFBackend emits logits/hidden on `device`; the policy MLP must match, and

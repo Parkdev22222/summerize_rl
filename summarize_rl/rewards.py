@@ -202,12 +202,31 @@ def compute_reward(
     # key_sentences is None when disabled/unavailable -> no contribution (0).
     keysent = key_sentence_coverage(summary, key_sentences) if key_sentences else 0.0
 
-    total = (
+    fluency = (
         config.w_faithfulness * faith
-        + config.w_coverage * cov
         + config.w_term * term
-        + config.w_keysent * keysent
         + config.w_contrast * contrast
+    )
+    if config.balance_content:
+        # Gate the fluency-style terms by how much *this source's* content the
+        # summary actually captured. A summary that is grammatical and military
+        # in tone but off-topic scores cov~0 (and keysent~0), so its faith/term/
+        # contrast are throttled to `gate_floor` and can no longer dominate. The
+        # content anchors (cov, keysent) stay additive so they always pull toward
+        # the source. This directly counters the "reward-component imbalance"
+        # failure where non-varying content terms give no signal and gameable
+        # fluency terms drive training to fluent-but-wrong summaries.
+        signals = [cov]
+        if key_sentences:
+            signals.append(keysent)
+        content = sum(signals) / len(signals)
+        gate = max(config.gate_floor, min(1.0, content))
+        fluency = gate * fluency
+
+    total = (
+        fluency
+        + config.w_coverage * cov
+        + config.w_keysent * keysent
         - config.w_length * lpen
         - config.w_copy * copy
     )

@@ -124,6 +124,54 @@ def test_reward_prefers_on_topic_over_generic():
     assert r_on.total > r_off.total
 
 
+def test_balance_content_gate_throttles_off_topic_fluency():
+    # A fluent, on-genre but off-topic summary can still score high on the
+    # gameable fluency terms (faith/term). With balance_content on, those terms
+    # are gated by content (cov+keysent), so the off-topic summary loses most of
+    # its fluency credit and the on-topic/off-topic total gap widens.
+    triplets = [Triplet("갈도비아", "목표", "국경통제"), Triplet("블루포스", "규모", "대대")]
+    source = "갈도비아 블루포스 대대가 국경통제 작전을 수행하며 정찰한다."
+    on_topic = "갈도비아 블루포스 대대가 국경통제 작전을 수행한다"
+    off_topic = "아군 부대가 고지를 점령하고 방어 진지를 구축하며 기동한다"
+    terms = ["기동", "정찰"]
+
+    plain = RewardConfig()
+    gated = RewardConfig(balance_content=True)
+
+    gap_plain = (compute_reward(on_topic, source, triplets, terms, plain).total
+                 - compute_reward(off_topic, source, triplets, terms, plain).total)
+    gap_gated = (compute_reward(on_topic, source, triplets, terms, gated).total
+                 - compute_reward(off_topic, source, triplets, terms, gated).total)
+
+    # Gating never hurts the ranking and strictly widens the separation.
+    assert gap_gated > gap_plain
+
+    # The off-topic summary's fluency credit is throttled toward the floor: its
+    # faith/term contribution is scaled by the (near-zero) content gate.
+    off_gated = compute_reward(off_topic, source, triplets, terms, gated)
+    off_plain = compute_reward(off_topic, source, triplets, terms, plain)
+    assert off_gated.total < off_plain.total
+
+
+def test_balance_content_off_by_default_is_unchanged():
+    # Default config must produce the exact additive reward (no gating), so the
+    # flag is a pure opt-in and existing runs are bit-for-bit unaffected.
+    cfg = RewardConfig()
+    assert cfg.balance_content is False
+    triplets = [Triplet("적", "행동", "이동")]
+    bd = compute_reward("적이 이동했다", "적이 이동했다", triplets, ["기동"], cfg)
+    expected = (
+        cfg.w_faithfulness * bd.faithfulness
+        + cfg.w_coverage * bd.coverage
+        + cfg.w_term * bd.term_usage
+        + cfg.w_keysent * bd.key_sentence
+        + cfg.w_contrast * bd.contrast
+        - cfg.w_length * bd.length_penalty
+        - cfg.w_copy * bd.copy_penalty
+    )
+    assert math.isclose(bd.total, expected, rel_tol=1e-9)
+
+
 def test_key_sentence_extractor_caches():
     from summarize_rl.config import RewardConfig
     from summarize_rl.keysent import KeySentenceExtractor
