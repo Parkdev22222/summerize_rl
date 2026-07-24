@@ -101,6 +101,28 @@ def test_copy_penalty_lowers_reward_for_verbatim():
     assert verbatim.total < verbatim.faithfulness * cfg.w_faithfulness
 
 
+def test_faithfulness_drops_single_char_noise():
+    fm = LexicalFaithfulness()
+    # 1-char tokens are ignored; only content tokens (>=2 chars) count.
+    # "고지" is absent from the source, so grounding is 0 (not diluted to ~1 by
+    # trivially-present single characters).
+    assert fm.score("고지 점령", "적 부대가 이동 중이다") == 0.0
+
+
+def test_reward_prefers_on_topic_over_generic():
+    # The reward must rank a summary about THIS source above a fluent but
+    # off-topic one (the training->inference "military but wrong content" bug).
+    cfg = RewardConfig()  # defaults: coverage up-weighted, term down-weighted
+    triplets = [Triplet("갈도비아", "목표", "국경통제"), Triplet("블루포스", "규모", "대대")]
+    source = "갈도비아 블루포스 대대가 국경통제 작전을 수행하며 정찰한다."
+    on_topic = "갈도비아 블루포스 대대가 국경통제 작전을 수행한다"
+    off_topic = "아군 부대가 고지를 점령하고 방어 진지를 구축하며 기동한다"  # generic military
+    r_on = compute_reward(on_topic, source, triplets, ["기동", "정찰"], cfg)
+    r_off = compute_reward(off_topic, source, triplets, ["기동", "정찰"], cfg)
+    assert r_on.coverage > r_off.coverage
+    assert r_on.total > r_off.total
+
+
 def test_contrast_term_enters_total():
     cfg = RewardConfig(
         w_faithfulness=1.0, w_coverage=1.0, w_term=0.5, w_contrast=0.5, w_length=0.2

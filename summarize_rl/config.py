@@ -62,8 +62,8 @@ class RewardConfig:
     """Reference-free reward weights (Section 2.4, 2.5.7)."""
 
     w_faithfulness: float = 1.0
-    w_coverage: float = 1.0
-    w_term: float = 0.5
+    w_coverage: float = 2.0  # triplet-entity coverage: the main on-topic anchor
+    w_term: float = 0.25  # standard-term use; low so generic term-dropping can't win
     w_contrast: float = 0.5  # PMI contrast (source vs. prior); trains weight `a`
     w_length: float = 0.2
     w_copy: float = 1.0  # penalty for verbatim source copying (anti-reward-hacking)
