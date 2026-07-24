@@ -22,10 +22,39 @@ def test_lexical_faithfulness_full_and_zero():
 
 
 def test_triplet_coverage():
-    triplets = [Triplet("1소대", "위치", "고지"), Triplet("적", "행동", "이동")]
-    # summary mentions 3 of 4 entities (1소대, 고지, 이동) but not "적"
+    triplets = [Triplet("1소대", "위치", "고지"), Triplet("적군", "행동", "이동")]
+    # entities {1소대, 고지, 적군, 이동}: 3 fully present, 적군 absent -> 3/4
     cov = triplet_coverage("1소대가 고지로 이동했다", triplets)
     assert math.isclose(cov, 3 / 4, rel_tol=1e-6)
+
+
+def test_triplet_coverage_space_insensitive():
+    # KB stores the entity solid; the summary spaces it -> still grounded.
+    trs = [Triplet("블루포스", "관계", "레드포스")]
+    assert triplet_coverage("블루 포스와 레드 포스가 교전한다", trs) == 1.0
+    assert triplet_coverage("날씨가 맑고 바람이 분다", trs) == 0.0
+
+
+def test_triplet_coverage_partial_credit():
+    # A long descriptive tail earns fractional credit for the tokens present,
+    # instead of collapsing to 0 unless every token appears verbatim.
+    trs = [Triplet("갈도비아", "목표", "국경 지역 통제")]
+    # 갈도비아 present (1.0); tail tokens {국경, 지역, 통제}: 국경+통제 present,
+    # 지역 absent -> 2/3.  mean(1.0, 2/3) ~= 0.833
+    cov = triplet_coverage("갈도비아가 국경 통제를 시도한다", trs)
+    assert 0.8 < cov < 0.86
+
+
+def test_triplet_coverage_gold_beats_offtopic_with_phrase_tails():
+    # Regression for the flat-zero-coverage bug: a summary that names the
+    # entities must clear a generic off-topic one by a wide margin, and must NOT
+    # be pinned near zero the way all-or-nothing phrase matching did.
+    trs = [Triplet("갈도비아", "목표", "국경 지역 통제"),
+           Triplet("블루포스", "규모", "제1기계화보병대대")]
+    on = "갈도비아 블루 포스가 제1기계화보병대대로 국경 지역 통제를 수행한다"
+    off = "아군 부대가 고지를 점령하고 방어 진지를 구축한다"
+    assert triplet_coverage(on, trs) > 0.9
+    assert triplet_coverage(off, trs) < 0.1
 
 
 def test_triplet_coverage_empty_is_one():
