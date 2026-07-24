@@ -77,6 +77,15 @@ class RewardConfig:
     keysent_n: int = 3  # how many key sentences to ask the LLM for
     keysent_max_new_tokens: int = 256  # generation budget for extraction
     norm_eps: float = 1e-8
+    # Content gating (anti "fluent-but-off-topic"): when True, the fluency-style
+    # components (faithfulness, term, contrast) are multiplied by how much source
+    # content the summary actually captured (coverage + key-sentence recall), so a
+    # summary that is grammatical/on-genre but not about *this* source cannot earn
+    # them. Coverage and key-sentence stay additive (they must always pull toward
+    # content). Off by default so the plain additive reward is unchanged; flip on
+    # to directly counter reward-component imbalance. See compute_reward.
+    balance_content: bool = False
+    gate_floor: float = 0.1  # minimum gate so a cold-start summary still gets *some* signal
 
 
 @dataclass

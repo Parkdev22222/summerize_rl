@@ -109,6 +109,9 @@ def main() -> None:
     p.add_argument("--kl-beta", type=float, default=None, help="[grpo] KL-to-reference coefficient")
     p.add_argument("--inner-epochs", type=int, default=None, help="[grpo] gradient updates per group")
     p.add_argument("--clip-eps", type=float, default=None, help="[grpo] PPO clip epsilon")
+    p.add_argument("--balance-content", dest="balance_content", action="store_true", default=False,
+                   help="gate fluency terms (faith/term/contrast) by content recall (cov+keysent) "
+                        "to stop fluent-but-off-topic summaries from winning. Off by default.")
     p.add_argument("--query", default=None, help="override the instruction/query")
     p.add_argument("--limit", type=int, default=None, help="use only the first N examples (smoke)")
     p.add_argument("--seed", type=int, default=42)
@@ -158,6 +161,7 @@ def main() -> None:
         cfg.grpo.inner_epochs = args.inner_epochs
     if args.clip_eps is not None:
         cfg.grpo.clip_eps = args.clip_eps
+    cfg.reward.balance_content = args.balance_content
 
     # --- policy on the SAME device as the backbone (stays fp32) ----------
     # HFBackend emits logits/hidden on `device`; the policy MLP must match, and
