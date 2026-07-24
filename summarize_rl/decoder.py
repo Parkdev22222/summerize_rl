@@ -80,18 +80,22 @@ def pmi_contrast(step: StepOutput, token: int) -> float:
     Compares a policy-free uniform mixture of the source/core/term branches
     (XQ, SQ, GQ) against the query-only prior branch Q:
 
-        pmi = log softmax(mean(XQ, SQ, GQ))[token] - log softmax(Q)[token]
+        pmi = tanh( log softmax(mean(XQ, SQ, GQ))[token]
+                    - log softmax(Q)[token] )
 
     Positive when the chosen token is more probable given the source context
-    than under the generic prior. Policy-independent (does not use a/b/c/d) so
-    it is a stable reward measure; returned as a plain float (no gradient).
+    than under the generic prior. The tanh bounds the per-token value to
+    (-1, 1): the raw log-ratio is unbounded, so without it the policy can
+    inflate reward without limit by cranking the prior-removal weight `a` to
+    its boundary (a reward-hacking collapse). Policy-independent (does not use
+    a/b/c/d); returned as a plain float (no gradient).
     """
     logits = step.logits.detach()
     positive = (logits[0] + logits[1] + logits[2]) / 3.0
     q = logits[3]
     lp_pos = F.log_softmax(positive, dim=-1)
     lp_q = F.log_softmax(q, dim=-1)
-    return float((lp_pos[token] - lp_q[token]).item())
+    return float(torch.tanh(lp_pos[token] - lp_q[token]).item())
 
 
 def _top_p_mask(logits: torch.Tensor, top_p: float) -> torch.Tensor:

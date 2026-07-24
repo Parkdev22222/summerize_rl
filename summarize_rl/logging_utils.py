@@ -25,6 +25,7 @@ _TAG_MAP = {
     "term_usage": "reward/term_usage",
     "contrast": "reward/contrast",
     "length_penalty": "reward/length_penalty",
+    "copy_penalty": "reward/copy_penalty",
     "mean_len": "misc/mean_len",
     "weight_a": "weights/a",
     "weight_b": "weights/b",

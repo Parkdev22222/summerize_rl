@@ -18,14 +18,14 @@ class PolicyConfig:
     dropout: float = 0.1
     use_contrast_features: bool = True  # append (h_* - h_Q) contrast features
     init_std: float = 0.01  # last-layer weight init N(0, init_std)
-    # Prior-removal strength `a`. Contrastive-decoding work treats this as a
-    # fixed hyperparameter rather than a learned per-token signal; fixing it
-    # shrinks the policy action space to the (b,c,d) simplex, which is more
-    # stable under RL. Default: fix a at `fixed_a`; set learn_a=True to instead
-    # learn it per token via sigmoid. The policy head stays 4-wide either way,
-    # so a checkpoint loads under both settings (but must match training to
-    # reproduce results).
-    learn_a: bool = False
+    # Prior-removal strength `a`. Default: learn it per token via sigmoid
+    # (the reward's PMI contrast term trains it). This is safe now that the
+    # contrast reward is tanh-bounded and the entropy bonus regularizes `a`,
+    # which together prevent the earlier a->boundary collapse. Set learn_a=False
+    # to instead hold `a` fixed at `fixed_a`, shrinking the action space to the
+    # (b,c,d) simplex. The policy head stays 4-wide either way, so a checkpoint
+    # loads under both settings (but must match training to reproduce results).
+    learn_a: bool = True
     fixed_a: float = 0.5  # used when learn_a is False; must be in (0, 1)
 
     @property
@@ -66,8 +66,10 @@ class RewardConfig:
     w_term: float = 0.5
     w_contrast: float = 0.5  # PMI contrast (source vs. prior); trains weight `a`
     w_length: float = 0.2
+    w_copy: float = 1.0  # penalty for verbatim source copying (anti-reward-hacking)
     target_length: int = 120  # tokens; overage penalized
     repeat_ngram: int = 3  # n-gram size for repetition penalty
+    copy_ngram: int = 4  # n-gram size for the extractive-copy penalty
     norm_eps: float = 1e-8
 
 

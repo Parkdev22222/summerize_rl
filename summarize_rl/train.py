@@ -80,6 +80,7 @@ class StepMetrics:
     term_usage: float
     contrast: float
     length_penalty: float
+    copy_penalty: float
     mean_len: float
     weight_a: float
     weight_b: float
@@ -229,6 +230,7 @@ class SCSTTrainer:
             "term_usage": sum(bd.term_usage for bd in breakdowns) / k,
             "contrast": sum(bd.contrast for bd in breakdowns) / k,
             "length_penalty": sum(bd.length_penalty for bd in breakdowns) / k,
+            "copy_penalty": sum(bd.copy_penalty for bd in breakdowns) / k,
             "mean_len": sum(r.length for r in rollouts) / len(rollouts),
             "weight_a": a,
             "weight_b": b,
@@ -268,8 +270,8 @@ class SCSTTrainer:
             lr=float(self.scheduler.get_last_lr()[0]),
             **{k: agg[k] for k in (
                 "mean_reward", "faithfulness", "coverage", "term_usage",
-                "contrast", "length_penalty", "mean_len", "weight_a", "weight_b",
-                "weight_c", "weight_d", "entropy",
+                "contrast", "length_penalty", "copy_penalty", "mean_len",
+                "weight_a", "weight_b", "weight_c", "weight_d", "entropy",
             )},
         )
         return metrics

@@ -107,9 +107,19 @@ class WeightPolicy(nn.Module):
         return Weights(a=a, b=bcd[..., 0], c=bcd[..., 1], d=bcd[..., 2])
 
     def entropy(self, weights: Weights) -> torch.Tensor:
-        """Entropy of the [b, c, d] categorical distribution, per batch item.
+        """Exploration/anti-collapse entropy of the weights, per batch item.
 
-        Used as an optional exploration bonus (Section 2.5.5 / 2.5.8).
+        Sum of the [b, c, d] categorical entropy AND the Bernoulli entropy of
+        `a`. Covering `a` matters: the categorical entropy alone leaves `a`
+        unregularized, so as an exploration bonus it can only stop b/c/d from
+        collapsing, not `a` from saturating at its 0/1 boundary. Maximized at
+        the neutral start (a=0.5, b=c=d=1/3). (Section 2.5.5 / 2.5.8.)
         """
         p = torch.stack([weights.b, weights.c, weights.d], dim=-1)
-        return -(p * torch.log(p.clamp_min(1e-12))).sum(dim=-1)
+        cat_ent = -(p * torch.log(p.clamp_min(1e-12))).sum(dim=-1)
+        a = weights.a
+        a_ent = -(
+            a * torch.log(a.clamp_min(1e-12))
+            + (1 - a) * torch.log((1 - a).clamp_min(1e-12))
+        )
+        return cat_ent + a_ent

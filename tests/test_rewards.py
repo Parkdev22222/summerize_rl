@@ -5,6 +5,7 @@ from summarize_rl.config import RewardConfig
 from summarize_rl.rewards import (
     LexicalFaithfulness,
     compute_reward,
+    extractive_copy,
     length_penalty,
     normalize_rewards,
     term_usage,
@@ -69,6 +70,35 @@ def test_compute_reward_weighted_sum():
     assert math.isclose(r.term_usage, 0.0, abs_tol=1e-9)
     expected = 1.0 * 1.0 + 1.0 * 1.0 + 0.5 * 0.0 - 0.2 * r.length_penalty
     assert math.isclose(r.total, expected, rel_tol=1e-6)
+
+
+def test_extractive_copy_detects_verbatim():
+    src = "적 부대가 능선을 따라 이동하였고 이후 고지를 장악하였다"
+    # verbatim span -> high copy fraction
+    assert extractive_copy("적 부대가 능선을 따라 이동하였고", src, n=4) == 1.0
+    # recombined / novel wording -> low copy
+    assert extractive_copy("부대가 고지를 장악", src, n=4) < 1.0
+    # too short for the n-gram -> no copy signal
+    assert extractive_copy("적 부대", src, n=4) == 0.0
+
+
+def test_term_usage_only_credits_non_source_terms():
+    # "기동" is NOT in the source -> standardization worth crediting
+    assert term_usage("기동을 실시", ["기동"], source="적이 이동했다") == 1.0
+    # standard term already verbatim in source -> nothing to add -> vacuous 1.0
+    assert term_usage("무관", ["점령"], source="적이 점령했다") == 1.0
+    # needed but absent from summary -> 0
+    assert term_usage("적이 움직였다", ["기동"], source="적이 이동했다") == 0.0
+
+
+def test_copy_penalty_lowers_reward_for_verbatim():
+    cfg = RewardConfig(w_copy=1.0, w_faithfulness=1.0, w_coverage=0.0, w_term=0.0)
+    src = "적 부대가 능선을 따라 이동하였고 이후 고지를 장악하였다"
+    verbatim = compute_reward(src, src, [], [], cfg)  # summary == source
+    novel = compute_reward("부대가 고지를 장악", src, [], [], cfg)
+    assert verbatim.copy_penalty > novel.copy_penalty
+    # copying is no longer a free lunch: its total is dragged down by the penalty
+    assert verbatim.total < verbatim.faithfulness * cfg.w_faithfulness
 
 
 def test_contrast_term_enters_total():
