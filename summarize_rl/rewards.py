@@ -45,15 +45,20 @@ class FaithfulnessModel(Protocol):
 
 
 class LexicalFaithfulness:
-    """Dependency-free fallback: fraction of summary tokens grounded in source.
+    """Dependency-free fallback: fraction of summary *content* tokens grounded.
 
     A precision-style proxy for faithfulness — every content token in the
-    summary should be traceable to the source. Real deployments swap in an NLI
-    entailment or FactKB model.
+    summary should be traceable to the source. Single-character tokens (Korean
+    particles/fragments, punctuation) are dropped: on a long report almost any
+    1-char token is a trivial substring, which let generic military text score
+    high without being about the source. Real deployments swap in an NLI
+    entailment or FactKB model via the FaithfulnessModel protocol.
     """
 
     def score(self, summary: str, source: str) -> float:
-        summ = tokenize(summary)
+        summ = [t for t in tokenize(summary) if len(t) >= 2]
+        if not summ:  # very short summary: fall back to all tokens
+            summ = tokenize(summary)
         if not summ:
             return 0.0
         src = source.lower()
