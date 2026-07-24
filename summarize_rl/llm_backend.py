@@ -56,6 +56,22 @@ class LLMBackend(ABC):
     def decode(self, token_ids: list[int]) -> str:
         """Detokenize generated ids to text (for reward computation)."""
 
+    # -- batched decoding: N rollouts of the SAME prompt at once -------------
+    #
+    # All N rollouts share one prompt (same 4 branch texts); they diverge only
+    # in the tokens they sample. Batching them into one forward (batch = N*4)
+    # is the main training speedup, turning N sequential single-stream decodes
+    # into one wide decode. Batched StepOutput stacks a rollout axis:
+    #   logits [N, num_branches, vocab],  hidden [N, num_branches, hidden].
+
+    def start_batch(self, branch_texts: dict[str, str], n: int) -> tuple[Any, StepOutput]:
+        """Prefill N copies of the prompt. Returns (state, batched StepOutput)."""
+        raise NotImplementedError
+
+    def step_batch(self, state: Any, tokens: list[int]) -> StepOutput:
+        """Advance every rollout by its own token (len(tokens) == N)."""
+        raise NotImplementedError
+
 
 class MockBackend(LLMBackend):
     """Deterministic backend for tests. No external model.
@@ -136,6 +152,30 @@ class MockBackend(LLMBackend):
         # Deterministic surface form: one token -> "t<id>".
         return " ".join(f"t{t}" for t in token_ids)
 
+    # -- batched decoding ---------------------------------------------------
+
+    def _emit_batch(self, ctx_lens_per_rollout: list[list[int]]) -> StepOutput:
+        logits = torch.stack([
+            torch.stack([self._branch_logits(i, cl[i]) for i in range(len(BRANCH_ORDER))])
+            for cl in ctx_lens_per_rollout
+        ])  # [N, 4, V]
+        hidden = torch.stack([
+            torch.stack([self._branch_hidden(i, cl[i]) for i in range(len(BRANCH_ORDER))])
+            for cl in ctx_lens_per_rollout
+        ])  # [N, 4, D]
+        return StepOutput(logits=logits, hidden=hidden)
+
+    def start_batch(self, branch_texts: dict[str, str], n: int) -> tuple[Any, StepOutput]:
+        base = [max(1, len(branch_texts.get(name, ""))) for name in BRANCH_ORDER]
+        state = {"ctx_lens": [list(base) for _ in range(n)], "n": n}
+        return state, self._emit_batch(state["ctx_lens"])
+
+    def step_batch(self, state: Any, tokens: list[int]) -> StepOutput:
+        # Mock logits depend only on (branch, ctx_len), not on the token, so we
+        # just advance every rollout's context length by one.
+        state["ctx_lens"] = [[c + 1 for c in cl] for cl in state["ctx_lens"]]
+        return self._emit_batch(state["ctx_lens"])
+
 
 class HFBackend(LLMBackend):
     """Wraps a frozen Hugging Face causal LM. transformers imported lazily.
@@ -150,7 +190,7 @@ class HFBackend(LLMBackend):
         model_name: str,
         device: str = "cpu",
         dtype: str = "float32",
-        attn_implementation: str | None = None,
+        attn_implementation: str | None = "flash_attention_2",
         compile_decode: bool = False,
         max_seq_len: int = 2048,
     ):
@@ -279,6 +319,52 @@ class HFBackend(LLMBackend):
         state["past"] = out.past_key_values
         logits = out.logits[:, -1, :].float()
         hidden = out.hidden_states[-1][:, -1, :].float()
+        return StepOutput(logits=logits, hidden=hidden)
+
+    # -- batched decoding (dynamic cache; N rollouts of one prompt) ----------
+    #
+    # The N rollouts share the same 4 branch prompts, so we tokenize once and
+    # repeat the 4-row block N times -> batch 4N, laid out rollout-major
+    # (rows [4r, 4r+4) belong to rollout r). This is exactly `_start_dynamic`
+    # with more rows, so it reuses the proven left-padding + KV-cache path.
+
+    @torch.no_grad()
+    def start_batch(self, branch_texts: dict[str, str], n: int) -> tuple[Any, StepOutput]:
+        texts = [branch_texts[name] for name in BRANCH_ORDER]
+        enc = self.tokenizer(texts, return_tensors="pt", padding=True).to(self.device)
+        input_ids = enc["input_ids"].repeat(n, 1)          # [4N, L]
+        attention_mask = enc["attention_mask"].repeat(n, 1)  # [4N, L]
+        out = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache=True,
+            output_hidden_states=True,
+        )
+        state = {"past": out.past_key_values, "attention_mask": attention_mask, "n": n}
+        logits = out.logits[:, -1, :].float().view(n, len(BRANCH_ORDER), self.vocab_size)
+        hidden = out.hidden_states[-1][:, -1, :].float().view(n, len(BRANCH_ORDER), self.hidden_size)
+        return state, StepOutput(logits=logits, hidden=hidden)
+
+    @torch.no_grad()
+    def step_batch(self, state: Any, tokens: list[int]) -> StepOutput:
+        n = state["n"]
+        nb = len(BRANCH_ORDER)
+        tok = torch.as_tensor(tokens, device=self.device, dtype=torch.long)  # [N]
+        input_ids = tok.repeat_interleave(nb).unsqueeze(1)  # [4N, 1], rollout-major
+        state["attention_mask"] = torch.cat(
+            [state["attention_mask"], torch.ones((n * nb, 1), device=self.device, dtype=torch.long)],
+            dim=1,
+        )
+        out = self.model(
+            input_ids=input_ids,
+            attention_mask=state["attention_mask"],
+            past_key_values=state["past"],
+            use_cache=True,
+            output_hidden_states=True,
+        )
+        state["past"] = out.past_key_values
+        logits = out.logits[:, -1, :].float().view(n, nb, self.vocab_size)
+        hidden = out.hidden_states[-1][:, -1, :].float().view(n, nb, self.hidden_size)
         return StepOutput(logits=logits, hidden=hidden)
 
     # -- static path (StaticCache, compiled single-token step) --------------

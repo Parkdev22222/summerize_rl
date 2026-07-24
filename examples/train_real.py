@@ -84,6 +84,14 @@ def main() -> None:
     p.add_argument("--glossary", default=None, help="JSON {term: [triggers]}; omit for demo glossary")
     p.add_argument("--device", default="cuda", help="cuda | cuda:0 | cpu")
     p.add_argument("--dtype", default="bfloat16", help="backbone dtype (bfloat16/float16/float32)")
+    p.add_argument("--attn", default="flash_attention_2",
+                   help="attention kernel: flash_attention_2 | sdpa | eager (auto-falls back)")
+    p.add_argument("--compile-decode", dest="compile_decode", action="store_true", default=True,
+                   help="compile the single-token decode step (StaticCache/CUDA graph). On by default.")
+    p.add_argument("--no-compile-decode", dest="compile_decode", action="store_false",
+                   help="disable compiled decode (needed for non-StaticCache architectures)")
+    p.add_argument("--max-seq-len", type=int, default=2048,
+                   help="prompt+generation bound for the static cache when --compile-decode")
     p.add_argument("--steps", type=int, default=None, help="override total_steps")
     p.add_argument("--lr", type=float, default=None, help="override learning rate")
     p.add_argument("--num-samples", type=int, default=None, help="rollouts per input (self-critical)")
@@ -105,7 +113,13 @@ def main() -> None:
     torch.manual_seed(args.seed)
 
     # --- frozen backbone -------------------------------------------------
-    backend = HFBackend(args.model, device=args.device, dtype=args.dtype)
+    # flash-attn + compiled decode on by default for throughput; both fall back
+    # / can be disabled (--attn, --no-compile-decode) for incompatible models.
+    backend = HFBackend(
+        args.model, device=args.device, dtype=args.dtype,
+        attn_implementation=args.attn, compile_decode=args.compile_decode,
+        max_seq_len=args.max_seq_len,
+    )
 
     # --- config, synced to the backbone ----------------------------------
     cfg = Config()

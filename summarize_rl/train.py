@@ -29,7 +29,7 @@ from torch.optim.lr_scheduler import LambdaLR
 
 from .branches import Example, build_branches
 from .config import Config
-from .decoder import Rollout, generate
+from .decoder import Rollout, generate, generate_batch
 from .glossary import Glossary
 from .llm_backend import LLMBackend
 from .policy import WeightPolicy
@@ -133,17 +133,15 @@ class SCSTTrainer:
         active_terms = [a.term for a in active]
         branch_texts = build_branches(example, active).as_dict()
 
-        rollouts, breakdowns = [], []
-        for _ in range(self.config.train.num_samples):
-            r = generate(
-                self.backend,
-                branch_texts,
-                self.policy,
-                self.config.decode,
-                greedy=False,
-                generator=self.generator,
-            )
-            bd = compute_reward(
+        # All N rollouts share this prompt -> one batched forward (batch = N*4)
+        # instead of N sequential decodes. The recorded log-probs carry grad, so
+        # the on-policy SCST loss uses them directly (no re-scoring).
+        rollouts = generate_batch(
+            self.backend, branch_texts, self.policy, self.config.decode,
+            n=self.config.train.num_samples, greedy=False, generator=self.generator,
+        )
+        breakdowns = [
+            compute_reward(
                 summary=r.text,
                 source=example.source,
                 triplets=example.triplets,
@@ -153,8 +151,8 @@ class SCSTTrainer:
                 summary_length=r.length,
                 contrast=r.mean_contrast(),
             )
-            rollouts.append(r)
-            breakdowns.append(bd)
+            for r in rollouts
+        ]
         return rollouts, breakdowns, active_terms
 
     def _greedy_reward(self, example: Example, active_terms: list[str]) -> float:
