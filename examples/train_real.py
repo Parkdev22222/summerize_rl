@@ -112,6 +112,12 @@ def main() -> None:
     p.add_argument("--balance-content", dest="balance_content", action="store_true", default=False,
                    help="gate fluency terms (faith/term/contrast) by content recall (cov+keysent) "
                         "to stop fluent-but-off-topic summaries from winning. Off by default.")
+    p.add_argument("--keysent-n", type=int, default=None,
+                   help="how many source key sentences the LLM extracts for the key-sentence "
+                        "reward (RewardConfig.keysent_n; default 3). Set 0 to disable the term.")
+    p.add_argument("--keysent-max-new-tokens", type=int, default=None,
+                   help="generation budget for key-sentence extraction; raise it when --keysent-n "
+                        "is large (default 256, ~enough for 3 sentences).")
     p.add_argument("--query", default=None, help="override the instruction/query")
     p.add_argument("--limit", type=int, default=None, help="use only the first N examples (smoke)")
     p.add_argument("--seed", type=int, default=42)
@@ -162,6 +168,10 @@ def main() -> None:
     if args.clip_eps is not None:
         cfg.grpo.clip_eps = args.clip_eps
     cfg.reward.balance_content = args.balance_content
+    if args.keysent_n is not None:
+        cfg.reward.keysent_n = args.keysent_n
+    if args.keysent_max_new_tokens is not None:
+        cfg.reward.keysent_max_new_tokens = args.keysent_max_new_tokens
 
     # --- policy on the SAME device as the backbone (stays fp32) ----------
     # HFBackend emits logits/hidden on `device`; the policy MLP must match, and
