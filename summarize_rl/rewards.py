@@ -1,7 +1,8 @@
 """Reference-free reward (Section 2.4, 2.5.7).
 
     R = w1*Faithfulness + w2*TripletCoverage + w3*TermUsage
-        + w5*PriorContrast - w4*LengthPenalty - w6*ExtractiveCopy
+        + w7*KeySentenceCoverage + w5*PriorContrast
+        - w4*LengthPenalty - w6*ExtractiveCopy
 
 No gold summary is required. Each component is in a bounded, interpretable
 range. Faithfulness is pluggable: the default is a dependency-free lexical
@@ -73,6 +74,7 @@ class RewardBreakdown:
     faithfulness: float
     coverage: float
     term_usage: float
+    key_sentence: float
     contrast: float
     length_penalty: float
     copy_penalty: float
@@ -126,6 +128,27 @@ def term_usage(summary: str, active_terms: list[str], source: str | None = None)
     return hit / len(target)
 
 
+def key_sentence_coverage(summary: str, key_sentences: list[str]) -> float:
+    """How much of the LLM-picked key sentences the summary reflects, in [0, 1].
+
+    For each key sentence, the fraction of its content tokens (>=2 chars) that
+    appear in the summary; averaged over the key sentences. A recall-style
+    anchor to the source's *salient* content (complements triplet coverage,
+    which only checks structured entities). Vacuously 1.0 if no key sentences.
+    """
+    if not key_sentences:
+        return 1.0
+    summary_norm = summary.lower()
+    scores = []
+    for sent in key_sentences:
+        toks = [t for t in tokenize(sent) if len(t) >= 2]
+        if not toks:
+            continue
+        grounded = sum(1 for t in toks if t in summary_norm)
+        scores.append(grounded / len(toks))
+    return sum(scores) / len(scores) if scores else 1.0
+
+
 def extractive_copy(summary: str, source: str, n: int = 4) -> float:
     """Fraction of summary n-grams copied verbatim from the source, in [0, 1].
 
@@ -167,6 +190,7 @@ def compute_reward(
     faithfulness_model: FaithfulnessModel | None = None,
     summary_length: int | None = None,
     contrast: float = 0.0,
+    key_sentences: list[str] | None = None,
 ) -> RewardBreakdown:
     fm = faithfulness_model or LexicalFaithfulness()
     faith = float(fm.score(summary, source))
@@ -175,11 +199,14 @@ def compute_reward(
     n_tokens = summary_length if summary_length is not None else len(tokenize(summary))
     lpen = length_penalty(n_tokens, config, summary)
     copy = extractive_copy(summary, source, n=config.copy_ngram)
+    # key_sentences is None when disabled/unavailable -> no contribution (0).
+    keysent = key_sentence_coverage(summary, key_sentences) if key_sentences else 0.0
 
     total = (
         config.w_faithfulness * faith
         + config.w_coverage * cov
         + config.w_term * term
+        + config.w_keysent * keysent
         + config.w_contrast * contrast
         - config.w_length * lpen
         - config.w_copy * copy
@@ -188,6 +215,7 @@ def compute_reward(
         faithfulness=faith,
         coverage=cov,
         term_usage=term,
+        key_sentence=keysent,
         contrast=contrast,
         length_penalty=lpen,
         copy_penalty=copy,

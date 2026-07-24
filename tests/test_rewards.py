@@ -6,6 +6,7 @@ from summarize_rl.rewards import (
     LexicalFaithfulness,
     compute_reward,
     extractive_copy,
+    key_sentence_coverage,
     length_penalty,
     normalize_rewards,
     term_usage,
@@ -121,6 +122,47 @@ def test_reward_prefers_on_topic_over_generic():
     r_off = compute_reward(off_topic, source, triplets, ["기동", "정찰"], cfg)
     assert r_on.coverage > r_off.coverage
     assert r_on.total > r_off.total
+
+
+def test_key_sentence_extractor_caches():
+    from summarize_rl.config import RewardConfig
+    from summarize_rl.keysent import KeySentenceExtractor
+    from summarize_rl.llm_backend import MockBackend
+
+    be = MockBackend(vocab_size=16, hidden_size=8, eos_token_id=1)
+    calls = {"n": 0}
+    base = be.generate_text
+    be.generate_text = lambda p, m=256: (calls.__setitem__("n", calls["n"] + 1) or base(p, m))
+
+    ext = KeySentenceExtractor(RewardConfig(keysent_n=2))
+    first = ext.extract(be, "원문 A")
+    second = ext.extract(be, "원문 A")  # served from cache
+    assert first == second
+    assert calls["n"] == 1  # extracted once per unique source
+    ext.extract(be, "원문 B")  # different source -> extracts again
+    assert calls["n"] == 2
+
+
+def test_key_sentence_coverage():
+    keys = ["갈도비아 블루포스가 국경을 통제한다", "레드포스가 도시를 방어한다"]
+    # reflects both key sentences' content (verb conjugation costs a little)
+    full = "갈도비아 블루포스가 국경을 통제하고 레드포스가 도시를 방어한다"
+    assert key_sentence_coverage(full, keys) > 0.8
+    # reflects neither
+    assert key_sentence_coverage("날씨가 맑고 새가 난다", keys) < 0.2
+    # no key sentences -> vacuously complete
+    assert key_sentence_coverage("아무말", []) == 1.0
+
+
+def test_key_sentence_enters_total():
+    cfg = RewardConfig(w_keysent=1.0)
+    keys = ["갈도비아 블루포스", "레드포스 방어"]
+    kw = dict(source="갈도비아 블루포스 레드포스 방어", triplets=[], active_terms=[], config=cfg)
+    with_ks = compute_reward("갈도비아 블루포스 레드포스 방어", key_sentences=keys, **kw)
+    without = compute_reward("갈도비아 블루포스 레드포스 방어", key_sentences=None, **kw)
+    assert with_ks.key_sentence > 0.9
+    assert without.key_sentence == 0.0  # None -> no contribution
+    assert with_ks.total > without.total
 
 
 def test_contrast_term_enters_total():

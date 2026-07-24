@@ -23,6 +23,7 @@ _TAG_MAP = {
     "faithfulness": "reward/faithfulness",
     "coverage": "reward/coverage",
     "term_usage": "reward/term_usage",
+    "key_sentence": "reward/key_sentence",
     "contrast": "reward/contrast",
     "length_penalty": "reward/length_penalty",
     "copy_penalty": "reward/copy_penalty",

@@ -72,6 +72,15 @@ class LLMBackend(ABC):
         """Advance every rollout by its own token (len(tokens) == N)."""
         raise NotImplementedError
 
+    def generate_text(self, prompt: str, max_new_tokens: int = 256) -> str:
+        """Plain greedy text generation for an arbitrary prompt.
+
+        Separate from the 4-branch PMI decode: used to have the frozen LLM
+        extract key sentences from a source for the reward. Optional; backends
+        that don't support it can leave this unimplemented.
+        """
+        raise NotImplementedError
+
 
 class MockBackend(LLMBackend):
     """Deterministic backend for tests. No external model.
@@ -175,6 +184,11 @@ class MockBackend(LLMBackend):
         # just advance every rollout's context length by one.
         state["ctx_lens"] = [[c + 1 for c in cl] for cl in state["ctx_lens"]]
         return self._emit_batch(state["ctx_lens"])
+
+    def generate_text(self, prompt: str, max_new_tokens: int = 256) -> str:
+        # Deterministic stub: echo the last chunk of the prompt (which contains
+        # the source), so key-sentence extraction is reproducible in tests.
+        return prompt.strip()[-max_new_tokens:]
 
 
 class HFBackend(LLMBackend):
@@ -436,3 +450,17 @@ class HFBackend(LLMBackend):
 
     def decode(self, token_ids: list[int]) -> str:
         return self.tokenizer.decode(token_ids, skip_special_tokens=True)
+
+    @torch.no_grad()
+    def generate_text(self, prompt: str, max_new_tokens: int = 256) -> str:
+        """Greedy text generation for an arbitrary prompt (key-sentence extraction)."""
+        enc = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        out = self.model.generate(
+            input_ids=enc["input_ids"],
+            attention_mask=enc.get("attention_mask"),
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            pad_token_id=self.pad_token_id,
+        )
+        new_tokens = out[0, enc["input_ids"].shape[1]:]
+        return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
