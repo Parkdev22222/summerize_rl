@@ -19,10 +19,12 @@ logit_c = (1 + a) · (b·logit_XQ + c·logit_SQ + d·logit_GQ) − a·logit_Q
 
 - `XQ` 원문+질의 · `SQ` triplet+질의 · `GQ` 게이팅 용어사전+질의 · `Q` 질의(prior)
 - **LLM은 frozen** — 로짓/hidden만 제공. 그래디언트는 정책망 θ에만 흐른다.
-- **prior 제거 강도 `a`는 기본적으로 `0.5`로 고정**하고 `b,c,d`(원문/triplet/용어 혼합)만
-  학습한다(대조 디코딩 관례 · RL 안정화). 토큰별로 `a`까지 학습하려면
-  `PolicyConfig(learn_a=True)`, 고정값은 `fixed_a`로 바꾼다. 학습·추론 config가 일치해야
-  결과가 재현된다(head는 항상 4폭이라 체크포인트는 양쪽에서 로드됨).
+- **prior 제거 강도 `a`는 기본적으로 토큰별 학습**(`PolicyConfig(learn_a=True)`)한다.
+  contrast 보상이 `tanh`로 bound되고 엔트로피 보너스가 `a`까지 정규화해 경계 붕괴를 막기
+  때문. `learn_a=False`로 두면 `fixed_a`(기본 0.5)에 고정하고 `b,c,d`(원문/triplet/용어 혼합)만
+  학습한다. head는 항상 4폭이라 체크포인트는 양쪽에서 로드되지만, 학습·추론 config가 일치해야
+  결과가 재현된다. `a`를 고정하면 보상의 `w_contrast` 항은 더 이상 `a`를 학습시키지 못하고
+  `b,c,d`만 형성한다(`w_contrast=0`으로 뺄 수 있음).
 
 ## 설치
 
@@ -37,9 +39,24 @@ uv sync --extra tb           # TensorBoard 로깅 사용 시 추가
 이후 모든 명령은 `uv run` 앞에 붙여 실행한다 (venv 자동 활성화):
 
 ```bash
-uv run python -m examples.run_demo --steps 20
+uv run python -m examples.run_demo --steps 20        # SCST 데모
+uv run python -m examples.run_grpo_demo --steps 20   # GRPO 데모
 uv run pytest
 ```
+
+### TensorBoard로 실험 결과 보기
+
+학습 스크립트(`run_demo`, `run_grpo_demo`, `train_real`)는 매 스텝의 지표를
+`--logdir`(기본 `runs/<name>`)에 기록한다. `reward/*`, `weights/*`, `loss/*`,
+`grpo/*`(kl·clip) 등 태그 네임스페이스로 정리된다.
+
+```bash
+uv run --extra tb python -m examples.run_grpo_demo --steps 200 --logdir runs/grpo
+uv run --extra tb tensorboard --logdir runs        # 브라우저에서 확인
+```
+
+`--logdir ''`(또는 `none`)로 로깅을 끌 수 있다. SCST와 GRPO를 같은 `runs/`
+아래 다른 하위 폴더로 기록하면 대시보드에서 곡선을 겹쳐 비교할 수 있다.
 
 의존성은 `pyproject.toml`에 선언되어 있고 `uv.lock`으로 고정된다.
 
