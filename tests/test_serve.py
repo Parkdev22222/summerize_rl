@@ -54,6 +54,20 @@ def test_summarize_uses_query_override():
     assert out["query"] == "핵심만 요약하시오."
 
 
+def test_summarize_includes_pure_llm_baseline_by_default():
+    svc = _service()
+    out = svc.summarize({"source": SOURCE})
+    # Pure-LLM (no-PMI) summary is returned alongside the policy summary.
+    assert "baseline" in out
+    assert isinstance(out["baseline"], str) and out["baseline"] != ""
+
+
+def test_summarize_baseline_can_be_disabled():
+    svc = _service()
+    out = svc.summarize({"source": SOURCE, "baseline": False})
+    assert "baseline" not in out
+
+
 def test_summarize_missing_source_raises():
     svc = _service()
     with pytest.raises(ValueError):

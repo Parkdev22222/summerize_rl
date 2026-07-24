@@ -11,7 +11,9 @@ one model). The terminal REPL client is :mod:`examples.summarize_client`.
 
 Endpoints:
     GET  /health              -> {"status": "ok"}
-    POST /summarize {source, query?}  -> {text, active_terms, mean_weights, query}
+    POST /summarize {source, query?, baseline?}
+                     -> {text, active_terms, mean_weights, query, baseline?}
+                     (baseline = pure-LLM summary; included unless baseline=false)
     POST /reload   {ckpt}     -> {ckpt, step}
 
 Example (pin one GPU):
@@ -49,14 +51,25 @@ class SummarizerService:
         if not source:
             raise ValueError("field 'source' is required and must be non-empty")
         query = payload.get("query") or self.default_query
+        # Also return the pure-LLM (no-PMI, no-policy) summary for comparison.
+        # On by default; a client can send {"baseline": false} to skip the extra
+        # generation (it roughly doubles per-request latency).
+        want_baseline = payload.get("baseline", True)
         with self._lock:
             result = self.summarizer.summarize(source, query=query)
-        return {
+            baseline = (
+                self.summarizer.baseline_summary(source, query=query)
+                if want_baseline else None
+            )
+        resp = {
             "text": result.text,
             "active_terms": result.active_terms,
             "mean_weights": list(result.mean_weights),
             "query": query,
         }
+        if baseline is not None:
+            resp["baseline"] = baseline
+        return resp
 
     def reload(self, payload: dict) -> dict:
         ckpt = (payload.get("ckpt") or "").strip()
