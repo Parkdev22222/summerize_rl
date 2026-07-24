@@ -33,6 +33,7 @@ import torch
 from summarize_rl.branches import Example, Triplet
 from summarize_rl.config import Config
 from summarize_rl.glossary import Glossary
+from summarize_rl.grpo import GRPOTrainer
 from summarize_rl.llm_backend import HFBackend
 from summarize_rl.logging_utils import make_logger
 from summarize_rl.policy import WeightPolicy
@@ -101,6 +102,13 @@ def main() -> None:
     p.add_argument("--min-new-tokens", type=int, default=None)
     p.add_argument("--save-every", type=int, default=None)
     p.add_argument("--ckpt-dir", default="checkpoints")
+    p.add_argument("--rl", choices=["scst", "grpo"], default="scst",
+                   help="RL algorithm: scst (self-critical) | grpo (group relative PO)")
+    # GRPO-only knobs (ignored under --rl scst); default None keeps GRPOConfig defaults.
+    p.add_argument("--group-size", type=int, default=None, help="[grpo] rollouts per prompt (G)")
+    p.add_argument("--kl-beta", type=float, default=None, help="[grpo] KL-to-reference coefficient")
+    p.add_argument("--inner-epochs", type=int, default=None, help="[grpo] gradient updates per group")
+    p.add_argument("--clip-eps", type=float, default=None, help="[grpo] PPO clip epsilon")
     p.add_argument("--query", default=None, help="override the instruction/query")
     p.add_argument("--limit", type=int, default=None, help="use only the first N examples (smoke)")
     p.add_argument("--seed", type=int, default=42)
@@ -141,6 +149,15 @@ def main() -> None:
         cfg.decode.max_new_tokens = args.max_new_tokens
     if args.min_new_tokens is not None:
         cfg.decode.min_new_tokens = args.min_new_tokens
+    # GRPO-specific overrides (no-ops under --rl scst).
+    if args.group_size is not None:
+        cfg.grpo.group_size = args.group_size
+    if args.kl_beta is not None:
+        cfg.grpo.kl_beta = args.kl_beta
+    if args.inner_epochs is not None:
+        cfg.grpo.inner_epochs = args.inner_epochs
+    if args.clip_eps is not None:
+        cfg.grpo.clip_eps = args.clip_eps
 
     # --- policy on the SAME device as the backbone (stays fp32) ----------
     # HFBackend emits logits/hidden on `device`; the policy MLP must match, and
@@ -152,18 +169,27 @@ def main() -> None:
     glossary = load_glossary(args.glossary)
     examples = load_corpus(args.data, args.query, args.limit)
 
-    trainer = SCSTTrainer(policy, backend, cfg, glossary=glossary, generator=gen)
+    is_grpo = args.rl == "grpo"
+    if is_grpo:
+        trainer = GRPOTrainer(policy, backend, cfg, glossary=glossary, generator=gen)
+    else:
+        trainer = SCSTTrainer(policy, backend, cfg, glossary=glossary, generator=gen)
     logger = make_logger(args.logdir)
 
     os.makedirs(args.ckpt_dir, exist_ok=True)
+    rollouts = cfg.grpo.group_size if is_grpo else cfg.train.num_samples
+    roll_label = "group_size" if is_grpo else "num_samples"
     print(
-        f"model={args.model} dtype={args.dtype} device={args.device} "
+        f"rl={args.rl} model={args.model} dtype={args.dtype} device={args.device} "
         f"hidden={backend.hidden_size} vocab={backend.vocab_size} "
         f"examples={len(examples)} steps={cfg.train.total_steps} "
-        f"num_samples={cfg.train.num_samples} grad_accum(micro-batch)={args.grad_accum}"
+        f"{roll_label}={rollouts} grad_accum(micro-batch)={args.grad_accum}"
     )
+    # GRPO adds kl / clip columns; the rest of the row is shared.
+    extra_hdr = f" {'kl':>6} {'clip':>5}" if is_grpo else ""
     print(f"{'step':>5} {'loss':>8} {'reward':>7} {'faith':>6} {'cov':>5} "
-          f"{'term':>5} {'a':>5} {'b':>5} {'c':>5} {'d':>5} {'gnorm':>6} {'lr':>9}")
+          f"{'term':>5}{extra_hdr} {'a':>5} {'b':>5} {'c':>5} {'d':>5} "
+          f"{'gnorm':>6} {'lr':>9}")
 
     ga = max(1, args.grad_accum)
     for step in range(cfg.train.total_steps):
@@ -177,8 +203,9 @@ def main() -> None:
             trainer.save_checkpoint(os.path.join(args.ckpt_dir, f"step{step+1}.pt"))
         logger.log_metrics(m, m.step)
         if step % args.log_every == 0:
+            extra = f" {m.kl:>6.3f} {m.clip_frac:>5.2f}" if is_grpo else ""
             print(f"{m.step:>5} {m.loss:>8.3f} {m.mean_reward:>7.3f} "
-                  f"{m.faithfulness:>6.3f} {m.coverage:>5.3f} {m.term_usage:>5.3f} "
+                  f"{m.faithfulness:>6.3f} {m.coverage:>5.3f} {m.term_usage:>5.3f}{extra} "
                   f"{m.weight_a:>5.2f} {m.weight_b:>5.2f} {m.weight_c:>5.2f} "
                   f"{m.weight_d:>5.2f} {m.grad_norm:>6.2f} {m.lr:>9.2e}")
 

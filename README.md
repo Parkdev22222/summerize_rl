@@ -131,19 +131,30 @@ for step in range(cfg.train.total_steps):
 
 ## 실제 학습 실행 (단일 GPU, CLI)
 
-`examples/train_real.py`가 frozen `HFBackend` + triplet 코퍼스(JSONL) + `SCSTTrainer`를
-CLI로 묶는다. 정책망(fp32)과 샘플링 generator를 백본과 같은 device로 올려 GPU 실행 시
-device 불일치가 없다. 7~13B bf16 백본은 H100 80GB **한 장**에 올라간다.
+`examples/train_real.py`가 frozen `HFBackend` + triplet 코퍼스(JSONL) + 트레이너를
+CLI로 묶는다. `--rl`로 **강화학습 알고리즘을 선택**한다: `scst`(기본, self-critical) 또는
+`grpo`(group relative PO). 정책망(fp32)과 샘플링 generator를 백본과 같은 device로 올려 GPU
+실행 시 device 불일치가 없다. 7~13B bf16 백본은 H100 80GB **한 장**에 올라간다.
 
 ```bash
 uv sync --extra hf                          # transformers 포함
-CUDA_VISIBLE_DEVICES=0 uv run python -m examples.train_real \
+
+# SCST (기본)
+CUDA_VISIBLE_DEVICES=0 uv run python -m examples.train_real --rl scst \
     --model <korean-7B-model> --dtype bfloat16 \
     --data data/scenarios_ko.jsonl \
     --steps 2000 --num-samples 5 --grad-accum 4 --ckpt-dir checkpoints
+
+# GRPO (그룹 정규화 advantage + PPO clip + 참조 KL)
+CUDA_VISIBLE_DEVICES=0 uv run python -m examples.train_real --rl grpo \
+    --model <korean-7B-model> --dtype bfloat16 \
+    --data data/scenarios_ko.jsonl \
+    --steps 2000 --group-size 8 --inner-epochs 2 --kl-beta 0.04 \
+    --grad-accum 4 --ckpt-dir checkpoints
 ```
 
-스모크 테스트: `--limit 4 --steps 5` 를 덧붙인다. 코퍼스는 `data/build_dataset.py`가
+`--rl grpo`에서만 쓰이는 노브: `--group-size`(G), `--inner-epochs`(μ), `--kl-beta`,
+`--clip-eps`. GRPO는 로그에 `kl`·`clip` 열이 추가된다. 스모크 테스트: `--limit 4 --steps 5` 를 덧붙인다. 코퍼스는 `data/build_dataset.py`가
 `data/parts/*.jsonl`(원문 한국어 번역 + triplet)을 병합해 `data/scenarios_ko.jsonl`로
 만든다. 라이브러리는 모델 샤딩/데이터 병렬 롤아웃을 구현하지 않으므로 두 번째 H100은
 현재 활용되지 않는다(더 큰 백본 샤딩은 `HFBackend`에 `device_map` 지원 추가 필요).
