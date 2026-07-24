@@ -106,6 +106,45 @@ class Summarizer:
 
     # -- inference ----------------------------------------------------------
 
+    def _prepare(
+        self,
+        source: str,
+        query: str | None,
+        triplets: list[Triplet] | None,
+    ) -> tuple[list[str], dict[str, str]]:
+        """Build (active_terms, branch_texts) for one input. Shared by the PMI
+        decode and the pure-LLM baseline so both see identical prompts."""
+        kwargs: dict = {"source": source, "triplets": triplets or []}
+        if query is not None:
+            kwargs["query"] = query
+        example = Example(**kwargs)
+        active = self.glossary.gate(source) if self.glossary else []
+        active_terms = [a.term for a in active]
+        branch_texts = build_branches(example, active).as_dict()
+        return active_terms, branch_texts
+
+    def baseline_summary(
+        self,
+        source: str,
+        *,
+        query: str | None = None,
+        triplets: list[Triplet] | None = None,
+    ) -> str:
+        """Pure-LLM summary: the frozen backbone's own answer, no PMI, no policy.
+
+        Feeds the XQ prompt (source + instruction) straight to the backbone via
+        ``generate_text`` — no branch mixing and no trained weight policy. This
+        is the baseline the PMI policy is meant to improve on, so showing both
+        side by side makes the policy's effect visible. Uses the same
+        ``max_new_tokens`` budget as the PMI decode.
+        """
+        _active, branch_texts = self._prepare(source, query, triplets)
+        with torch.no_grad():
+            text = self.backend.generate_text(
+                branch_texts["XQ"], self.config.decode.max_new_tokens
+            )
+        return text.strip()
+
     def summarize(
         self,
         source: str,
@@ -118,14 +157,7 @@ class Summarizer:
         ``query`` defaults to the standard instruction on :class:`Example`.
         ``triplets`` feed the SQ (core-info) branch; omit for source-only input.
         """
-        kwargs: dict = {"source": source, "triplets": triplets or []}
-        if query is not None:
-            kwargs["query"] = query
-        example = Example(**kwargs)
-
-        active = self.glossary.gate(source) if self.glossary else []
-        active_terms = [a.term for a in active]
-        branch_texts = build_branches(example, active).as_dict()
+        active_terms, branch_texts = self._prepare(source, query, triplets)
 
         with torch.no_grad():
             rollout = generate(

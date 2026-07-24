@@ -34,6 +34,7 @@ HELP = """\
 명령어:
   (원문 붙여넣기 후 빈 줄)  원문을 서버에 보내 요약
   :query <지시문>           요약 지시문(query) 변경 (클라이언트 측)
+  :baseline <on|off>        순수 LLM(제안 방식 아님) 요약도 함께 표시 (기본 on)
   :ckpt <경로>              서버가 다른 체크포인트를 재로드하도록 요청
   :help                     이 도움말
   :q / :quit / :exit        종료
@@ -76,7 +77,8 @@ def check_health(server: str) -> None:
 
 def repl(server: str, query: str) -> None:
     print(HELP)
-    print(f"[server] {server}   [query] {query}\n")
+    show_baseline = True
+    print(f"[server] {server}   [query] {query}   [baseline] on\n")
     while True:
         block = read_source()
         if block is None:
@@ -98,6 +100,15 @@ def repl(server: str, query: str) -> None:
                 else:
                     print(f"[query] {query}\n")
                 continue
+            if cmd == ":baseline":
+                val = arg.strip().lower()
+                if val in ("on", "off"):
+                    show_baseline = val == "on"
+                    print(f"[baseline {'on' if show_baseline else 'off'}]\n")
+                else:
+                    print(f"[baseline] {'on' if show_baseline else 'off'}  "
+                          "(사용법: :baseline on|off)\n")
+                continue
             if cmd == ":ckpt":
                 if not arg:
                     print("사용법: :ckpt <경로>\n")
@@ -115,10 +126,15 @@ def repl(server: str, query: str) -> None:
         if not source:
             continue
         try:
-            resp = post(server, "/summarize", {"source": source, "query": query})
+            resp = post(
+                server, "/summarize",
+                {"source": source, "query": query, "baseline": show_baseline},
+            )
         except RuntimeError as e:
             print(f"[오류] {e}\n")
             continue
+        if resp.get("baseline"):
+            print(f"\n[순수 LLM] {resp['baseline']}")
         print_summary(
             SummaryResult(
                 text=resp["text"],
