@@ -1,9 +1,71 @@
 import torch
 
 from summarize_rl.config import DecodeConfig, PolicyConfig
-from summarize_rl.decoder import combine_logits, generate, pmi_contrast, _top_p_mask
+from summarize_rl.decoder import (
+    combine_logits,
+    generate,
+    generate_batch,
+    pmi_contrast,
+    score_tokens,
+    score_tokens_batch,
+    _top_p_mask,
+)
 from summarize_rl.llm_backend import MockBackend, StepOutput
 from summarize_rl.policy import WeightPolicy, Weights
+
+
+def _batch_setup(max_new=10, min_new=3):
+    torch.manual_seed(0)
+    policy = WeightPolicy(PolicyConfig(llm_hidden_size=8, hidden_dim=16))
+    policy.eval()
+    backend = MockBackend(vocab_size=16, hidden_size=8, eos_token_id=1)
+    cfg = DecodeConfig(max_new_tokens=max_new, min_new_tokens=min_new, eos_token_id=1)
+    bt = {"XQ": "source text", "SQ": "core", "GQ": "gloss", "Q": "q"}
+    return backend, bt, policy, cfg
+
+
+def test_generate_batch_greedy_matches_single():
+    # MockBackend logits are history-independent, so every batched greedy
+    # rollout must equal the single greedy decode token-for-token.
+    backend, bt, policy, cfg = _batch_setup()
+    single = generate(backend, bt, policy, cfg, greedy=True)
+    batch = generate_batch(backend, bt, policy, cfg, n=4, greedy=True)
+    assert len(batch) == 4
+    for r in batch:
+        assert r.token_ids == single.token_ids
+        assert len(r.logps) == len(r.token_ids)
+        assert len(r.contrasts) == len(r.token_ids)
+
+
+def test_score_tokens_batch_matches_single():
+    backend, bt, policy, cfg = _batch_setup()
+    seqs = [[2, 3, 4, 5], [6, 7, 8], [9, 10, 11, 12, 13]]  # different lengths
+    batched = score_tokens_batch(backend, bt, policy, seqs, cfg)
+    assert len(batched) == 3
+    for r, ids in enumerate(seqs):
+        single = score_tokens(backend, bt, policy, ids, cfg)
+        assert len(batched[r].logps) == len(ids)
+        lp_single = torch.stack(single.logps)
+        lp_batch = torch.stack(batched[r].logps)
+        assert torch.allclose(lp_single, lp_batch, atol=1e-5)
+
+
+def test_score_tokens_batch_carries_grad():
+    backend, bt, policy, cfg = _batch_setup()
+    batched = score_tokens_batch(backend, bt, policy, [[2, 3, 4], [5, 6]], cfg)
+    torch.stack(batched[0].logps).sum().backward()
+    g = policy.head.weight.grad
+    assert g is not None and bool((g != 0).any())
+
+
+def test_mock_backend_batch_shapes():
+    backend = MockBackend(vocab_size=16, hidden_size=8, eos_token_id=1)
+    bt = {"XQ": "a", "SQ": "b", "GQ": "c", "Q": "d"}
+    state, step = backend.start_batch(bt, n=3)
+    assert step.logits.shape == (3, 4, 16)
+    assert step.hidden.shape == (3, 4, 8)
+    step2 = backend.step_batch(state, [2, 3, 4])
+    assert step2.logits.shape == (3, 4, 16)
 
 
 def test_pmi_contrast_sign():

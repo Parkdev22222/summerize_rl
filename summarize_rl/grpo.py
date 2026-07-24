@@ -34,7 +34,7 @@ from torch.optim import AdamW
 
 from .branches import Example, build_branches
 from .config import Config
-from .decoder import Rollout, generate, score_tokens
+from .decoder import Rollout, generate_batch, score_tokens_batch
 from .glossary import Glossary
 from .llm_backend import LLMBackend
 from .policy import WeightPolicy
@@ -128,20 +128,17 @@ class GRPOTrainer:
         active_terms = [a.term for a in active]
         branch_texts = build_branches(example, active).as_dict()
 
-        rollouts, breakdowns = [], []
         # Sampling and old/ref scoring run without gradient and without dropout.
+        # All G rollouts share this prompt, so they are generated in one batched
+        # forward (batch = G*4) instead of G sequential single-stream decodes.
         self.policy.eval()
         with torch.no_grad():
-            for _ in range(g.group_size):
-                r = generate(
-                    self.backend,
-                    branch_texts,
-                    self.policy,
-                    self.decode,
-                    greedy=False,
-                    generator=self.generator,
-                )
-                bd = compute_reward(
+            rollouts = generate_batch(
+                self.backend, branch_texts, self.policy, self.decode,
+                n=g.group_size, greedy=False, generator=self.generator,
+            )
+            breakdowns = [
+                compute_reward(
                     summary=r.text,
                     source=example.source,
                     triplets=example.triplets,
@@ -151,23 +148,23 @@ class GRPOTrainer:
                     summary_length=r.length,
                     contrast=r.mean_contrast(),
                 )
-                rollouts.append(r)
-                breakdowns.append(bd)
+                for r in rollouts
+            ]
 
             rewards = [bd.total for bd in breakdowns]
             advantages = self._group_advantages(rewards)
 
-            # pi_theta_old and pi_ref log-probs are fixed for all inner epochs.
-            old_logps, ref_logps = [], []
-            for r in rollouts:
-                old = score_tokens(
-                    self.backend, branch_texts, self.policy, r.token_ids, self.decode
-                )
-                ref = score_tokens(
-                    self.backend, branch_texts, self.ref_policy, r.token_ids, self.decode
-                )
-                old_logps.append(torch.stack(old.logps).detach())
-                ref_logps.append(torch.stack(ref.logps).detach())
+            # pi_theta_old and pi_ref log-probs are fixed for all inner epochs;
+            # score the whole group in one batched pass under each policy.
+            token_ids_list = [r.token_ids for r in rollouts]
+            old_scored = score_tokens_batch(
+                self.backend, branch_texts, self.policy, token_ids_list, self.decode
+            )
+            ref_scored = score_tokens_batch(
+                self.backend, branch_texts, self.ref_policy, token_ids_list, self.decode
+            )
+            old_logps = [torch.stack(s.logps).detach() for s in old_scored]
+            ref_logps = [torch.stack(s.logps).detach() for s in ref_scored]
 
         return _Group(
             branch_texts=branch_texts,
@@ -190,14 +187,16 @@ class GRPOTrainer:
 
     def _surrogate_loss(self, group: _Group) -> tuple[torch.Tensor, dict]:
         g = self.config.grpo
+        # Re-score the whole group under the current policy in one batched pass.
+        token_ids_list = [r.token_ids for r in group.rollouts]
+        new_scored = score_tokens_batch(
+            self.backend, group.branch_texts, self.policy, token_ids_list, self.decode
+        )
         loss = torch.zeros((), dtype=torch.float32)
         kl_sum, clip_sum, ent_sum, tok_total = 0.0, 0.0, 0.0, 0
-        for rollout, adv, old_lp, ref_lp in zip(
-            group.rollouts, group.advantages, group.old_logps, group.ref_logps
+        for scored, adv, old_lp, ref_lp in zip(
+            new_scored, group.advantages, group.old_logps, group.ref_logps
         ):
-            scored = score_tokens(
-                self.backend, group.branch_texts, self.policy, rollout.token_ids, self.decode
-            )
             new_lp = torch.stack(scored.logps)  # [T], grad
             ratio = torch.exp(new_lp - old_lp)  # [T]
 

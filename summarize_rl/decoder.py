@@ -221,3 +221,169 @@ def score_tokens(
         scored.entropies.append(policy.entropy(weights).squeeze(0))
         step = backend.step(state, token)
     return scored
+
+
+# -- batched decoding: N rollouts of one prompt in a single forward ----------
+#
+# Batched StepOutput stacks a rollout axis: logits [N, 4, V], hidden [N, 4, D].
+# The four branches of a rollout still share that rollout's sampled token. The
+# per-token sampling (top-p over different supports) stays a cheap Python loop;
+# the expensive part -- the LLM forward -- is what gets batched.
+
+
+def combine_logits_batch(step: StepOutput, weights: Weights) -> torch.Tensor:
+    """Batched PMI combination. logits [N,4,V], weights each [N] -> [N,V]."""
+    logits = step.logits.detach()
+    xq, sq, gq, q = logits[:, 0], logits[:, 1], logits[:, 2], logits[:, 3]  # [N,V]
+    a, b, c, d = weights.a, weights.b, weights.c, weights.d  # each [N]
+    positive = b[:, None] * xq + c[:, None] * sq + d[:, None] * gq
+    return (1 + a)[:, None] * positive - a[:, None] * q  # [N,V]
+
+
+def _branch_features_batch(step: StepOutput, use_contrast: bool) -> torch.Tensor:
+    """step.hidden [N,4,D] -> policy features [N, input_dim]."""
+    h = step.hidden  # [N,4,D]
+    bh = BranchHidden(h_xq=h[:, 0], h_sq=h[:, 1], h_gq=h[:, 2], h_q=h[:, 3])
+    return bh.as_features(use_contrast)
+
+
+def pmi_contrast_batch(step: StepOutput, tokens: torch.Tensor) -> torch.Tensor:
+    """Batched, tanh-bounded PMI of each rollout's chosen token. -> [N]."""
+    logits = step.logits.detach()  # [N,4,V]
+    positive = (logits[:, 0] + logits[:, 1] + logits[:, 2]) / 3.0  # [N,V]
+    q = logits[:, 3]
+    lp_pos = F.log_softmax(positive, dim=-1)
+    lp_q = F.log_softmax(q, dim=-1)
+    idx = tokens[:, None]
+    return torch.tanh(lp_pos.gather(1, idx).squeeze(1) - lp_q.gather(1, idx).squeeze(1))
+
+
+def _resolve_pad(config: DecodeConfig, backend: LLMBackend, eos: int | None) -> int:
+    if config.pad_token_id is not None:
+        return config.pad_token_id
+    pad = getattr(backend, "pad_token_id", None)
+    if pad is not None:
+        return pad
+    return eos if eos is not None else 0
+
+
+def generate_batch(
+    backend: LLMBackend,
+    branch_texts: dict[str, str],
+    policy: WeightPolicy,
+    config: DecodeConfig,
+    n: int,
+    *,
+    greedy: bool = False,
+    generator: torch.Generator | None = None,
+) -> list[Rollout]:
+    """Generate N rollouts of ONE prompt with a single batched forward per step.
+
+    Equivalent to calling `generate` N times, but the frozen-LLM forward runs
+    once at batch N*4 instead of N times at batch 4. Rollouts that hit EOS are
+    frozen (fed the pad token, no longer recorded) while the rest continue.
+    """
+    use_contrast = policy.config.use_contrast_features
+    eos = config.eos_token_id if config.eos_token_id is not None else backend.eos_token_id
+    pad = _resolve_pad(config, backend, eos)
+
+    state, step = backend.start_batch(branch_texts, n)
+    rollouts = [Rollout() for _ in range(n)]
+    done = [False] * n
+
+    for t in range(config.max_new_tokens):
+        weights = policy(_branch_features_batch(step, use_contrast))  # each [N]
+        combined = combine_logits_batch(step, weights)  # [N,V]
+        if eos is not None and t < config.min_new_tokens:
+            combined = combined.clone()
+            combined[:, eos] = float("-inf")
+        scaled = combined / max(config.temperature, 1e-6)
+
+        tokens, logps = [], []
+        for r in range(n):
+            row = scaled[r]
+            if greedy:
+                tok = int(torch.argmax(row).item())
+                logps.append(F.log_softmax(row, dim=-1)[tok])
+            else:
+                keep = _top_p_mask(row, config.top_p)
+                logp_dist = F.log_softmax(row.masked_fill(~keep, float("-inf")), dim=-1)
+                tok = int(torch.multinomial(torch.exp(logp_dist), 1, generator=generator).item())
+                logps.append(logp_dist[tok])
+            tokens.append(tok)
+
+        ents = policy.entropy(weights)  # [N]
+        contrasts = pmi_contrast_batch(step, torch.as_tensor(tokens, device=scaled.device))
+
+        for r in range(n):
+            if done[r]:
+                continue
+            rk = rollouts[r]
+            rk.token_ids.append(tokens[r])
+            rk.logps.append(logps[r])
+            rk.entropies.append(ents[r])
+            rk.contrasts.append(float(contrasts[r].item()))
+            rk.weight_trace.append((
+                float(weights.a[r].item()), float(weights.b[r].item()),
+                float(weights.c[r].item()), float(weights.d[r].item()),
+            ))
+            if eos is not None and tokens[r] == eos:
+                rk.hit_eos = True
+                done[r] = True
+
+        if all(done):
+            break
+        feed = [pad if done[r] else tokens[r] for r in range(n)]
+        step = backend.step_batch(state, feed)
+
+    for rk in rollouts:
+        rk.text = backend.decode(rk.token_ids)
+    return rollouts
+
+
+def score_tokens_batch(
+    backend: LLMBackend,
+    branch_texts: dict[str, str],
+    policy: WeightPolicy,
+    token_ids_list: list[list[int]],
+    config: DecodeConfig,
+) -> list[ScoredSequence]:
+    """Batched teacher-forced re-scoring of N fixed token sequences.
+
+    Same semantics as calling `score_tokens` per sequence (full-softmax logp,
+    same min_new_tokens EOS mask), but one batched forward per position up to
+    the longest sequence. Shorter sequences feed the pad token past their end
+    and simply stop recording, so each returned ScoredSequence has exactly its
+    own length.
+    """
+    use_contrast = policy.config.use_contrast_features
+    eos = config.eos_token_id if config.eos_token_id is not None else backend.eos_token_id
+    pad = _resolve_pad(config, backend, eos)
+
+    n = len(token_ids_list)
+    scored = [ScoredSequence() for _ in range(n)]
+    lengths = [len(ids) for ids in token_ids_list]
+    total = max(lengths) if lengths else 0
+    if total == 0:
+        return scored
+
+    state, step = backend.start_batch(branch_texts, n)
+    for t in range(total):
+        weights = policy(_branch_features_batch(step, use_contrast))
+        combined = combine_logits_batch(step, weights)
+        if eos is not None and t < config.min_new_tokens:
+            combined = combined.clone()
+            combined[:, eos] = float("-inf")
+        scaled = combined / max(config.temperature, 1e-6)
+        logp_dist = F.log_softmax(scaled, dim=-1)  # [N,V], full softmax
+        ents = policy.entropy(weights)
+
+        toks = [token_ids_list[r][t] if t < lengths[r] else pad for r in range(n)]
+        toks_t = torch.as_tensor(toks, device=scaled.device)
+        chosen = logp_dist.gather(1, toks_t[:, None]).squeeze(1)  # [N]
+        for r in range(n):
+            if t < lengths[r]:
+                scored[r].logps.append(chosen[r])
+                scored[r].entropies.append(ents[r])
+        step = backend.step_batch(state, toks)
+    return scored
