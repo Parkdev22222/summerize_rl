@@ -18,15 +18,14 @@ class PolicyConfig:
     dropout: float = 0.1
     use_contrast_features: bool = True  # append (h_* - h_Q) contrast features
     init_std: float = 0.01  # last-layer weight init N(0, init_std)
-    # Prior-removal strength `a`. Contrastive-decoding work treats this as a
-    # fixed hyperparameter rather than a learned per-token signal; fixing it
-    # shrinks the policy action space to the (b,c,d) simplex, which is more
-    # stable under RL. Default: fix a at `fixed_a`; set learn_a=True to instead
-    # learn it per token via sigmoid. The policy head stays 4-wide either way,
-    # so a checkpoint loads under both settings (but must match training to
-    # reproduce results). Note: with a fixed, the reward's `w_contrast` term no
-    # longer trains `a` — it only shapes b,c,d (set w_contrast=0 to drop it).
-    learn_a: bool = False
+    # Prior-removal strength `a`. Default: learn it per token via sigmoid
+    # (the reward's PMI contrast term trains it). This is safe now that the
+    # contrast reward is tanh-bounded and the entropy bonus regularizes `a`,
+    # which together prevent the earlier a->boundary collapse. Set learn_a=False
+    # to instead hold `a` fixed at `fixed_a`, shrinking the action space to the
+    # (b,c,d) simplex. The policy head stays 4-wide either way, so a checkpoint
+    # loads under both settings (but must match training to reproduce results).
+    learn_a: bool = True
     fixed_a: float = 0.5  # used when learn_a is False; must be in (0, 1)
 
     @property
