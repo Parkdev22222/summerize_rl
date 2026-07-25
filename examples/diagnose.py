@@ -108,10 +108,13 @@ def main() -> None:
     p.add_argument("--device", default="cuda")
     p.add_argument("--dtype", default="bfloat16")
     p.add_argument("--glossary", default=None)
+    p.add_argument("--trust-remote-code", dest="trust_remote_code", action="store_true", default=False,
+                   help="allow custom modeling code from the HF repo (needed for EXAONE etc.)")
     args = p.parse_args()
 
     torch.manual_seed(0)
-    backend = HFBackend(args.model, device=args.device, dtype=args.dtype)
+    backend = HFBackend(args.model, device=args.device, dtype=args.dtype,
+                        trust_remote_code=args.trust_remote_code)
     cfg = Config()
     cfg.policy.llm_hidden_size = backend.hidden_size
     cfg.decode.eos_token_id = backend.eos_token_id

@@ -194,6 +194,7 @@ def build_hf_summarizer(
     max_seq_len: int = 2048,
     max_new_tokens: int | None = None,
     min_new_tokens: int | None = None,
+    trust_remote_code: bool = False,
 ) -> tuple[Summarizer, Config, int]:
     """Build a real-backbone Summarizer and load a checkpoint. Returns (summarizer, config, step).
 
@@ -212,6 +213,7 @@ def build_hf_summarizer(
         attn_implementation=attn_implementation,
         compile_decode=compile_decode,
         max_seq_len=max_seq_len,
+        trust_remote_code=trust_remote_code,
     )
 
     cfg = Config()

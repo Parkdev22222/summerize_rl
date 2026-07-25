@@ -118,6 +118,7 @@ def build_summarizer(args) -> tuple[Summarizer, Config]:
         max_seq_len=args.max_seq_len,
         max_new_tokens=args.max_new_tokens,
         min_new_tokens=args.min_new_tokens,
+        trust_remote_code=args.trust_remote_code,
     )
     print(
         f"model={args.model} dtype={args.dtype} device={args.device} "
@@ -190,6 +191,8 @@ def main() -> None:
                    help="torch.compile + StaticCache decode (CUDA-graph step; needs Llama/Qwen-like model; first call slow)")
     p.add_argument("--max-seq-len", type=int, default=2048,
                    help="static cache/mask length bound for --compile (prompt+generation)")
+    p.add_argument("--trust-remote-code", dest="trust_remote_code", action="store_true", default=False,
+                   help="allow custom modeling code from the HF repo (needed for EXAONE etc.)")
     p.add_argument("--query", default=DEFAULT_QUERY, help="summarization instruction")
     p.add_argument("--max-new-tokens", type=int, default=None)
     p.add_argument("--min-new-tokens", type=int, default=None)
