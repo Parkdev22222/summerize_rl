@@ -93,6 +93,9 @@ def main() -> None:
                    help="disable compiled decode (needed for non-StaticCache architectures)")
     p.add_argument("--max-seq-len", type=int, default=2048,
                    help="prompt+generation bound for the static cache when --compile-decode")
+    p.add_argument("--trust-remote-code", dest="trust_remote_code", action="store_true", default=False,
+                   help="allow custom modeling code from the HF repo (needed for EXAONE and other "
+                        "models that ship their own architecture).")
     p.add_argument("--steps", type=int, default=None, help="override total_steps")
     p.add_argument("--lr", type=float, default=None, help="override learning rate")
     p.add_argument("--num-samples", type=int, default=None, help="rollouts per input (self-critical)")
@@ -128,7 +131,7 @@ def main() -> None:
     backend = HFBackend(
         args.model, device=args.device, dtype=args.dtype,
         attn_implementation=args.attn, compile_decode=args.compile_decode,
-        max_seq_len=args.max_seq_len,
+        max_seq_len=args.max_seq_len, trust_remote_code=args.trust_remote_code,
     )
 
     # --- config, synced to the backbone ----------------------------------

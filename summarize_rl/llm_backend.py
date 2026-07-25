@@ -207,6 +207,7 @@ class HFBackend(LLMBackend):
         attn_implementation: str | None = "sdpa",
         compile_decode: bool = False,
         max_seq_len: int = 2048,
+        trust_remote_code: bool = False,
     ):
         """attn_implementation: None (transformers default) | "sdpa" |
         "flash_attention_2" | "eager". Default "sdpa" is built into PyTorch
@@ -226,10 +227,13 @@ class HFBackend(LLMBackend):
         """
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name, trust_remote_code=trust_remote_code
+        )
         torch_dtype = getattr(torch, dtype)
         self.model, self.attn_implementation = self._load_model(
-            AutoModelForCausalLM, model_name, torch_dtype, attn_implementation
+            AutoModelForCausalLM, model_name, torch_dtype, attn_implementation,
+            trust_remote_code=trust_remote_code,
         )
         self.model = self.model.to(device)
         self.model.eval()
@@ -265,7 +269,8 @@ class HFBackend(LLMBackend):
         return [requested]  # None (transformers default) or explicit "eager"
 
     @classmethod
-    def _load_model(cls, auto_cls, model_name, torch_dtype, attn_implementation):
+    def _load_model(cls, auto_cls, model_name, torch_dtype, attn_implementation,
+                    trust_remote_code=False):
         """Load the causal LM, honoring attn_implementation with fallback.
 
         Returns (model, resolved_impl). ``resolved_impl`` is the kernel actually
@@ -274,7 +279,11 @@ class HFBackend(LLMBackend):
         last_err: Exception | None = None
         chain = cls._attn_fallback_chain(attn_implementation)
         for impl in chain:
-            kwargs: dict = {"dtype": torch_dtype, "output_hidden_states": True}
+            kwargs: dict = {
+                "dtype": torch_dtype,
+                "output_hidden_states": True,
+                "trust_remote_code": trust_remote_code,
+            }
             if impl is not None:
                 kwargs["attn_implementation"] = impl
             try:
