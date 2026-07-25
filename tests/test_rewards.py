@@ -131,6 +131,27 @@ def test_copy_penalty_lowers_reward_for_verbatim():
     assert verbatim.total < verbatim.faithfulness * cfg.w_faithfulness
 
 
+def test_ungrounded_fact_penalty_flags_invented_units_and_numbers():
+    from summarize_rl.rewards import ungrounded_fact_penalty
+    source = "제1기계화보병대대가 전차 2대를 파괴하였고 부상 2명이 발생함"
+    # faithful: every unit/quantity is in the source -> no penalty
+    assert ungrounded_fact_penalty("제1기계화보병대대가 전차 2대를 파괴", source) == 0.0
+    # hallucinated: invents a unit and a quantity absent from the source
+    p = ungrounded_fact_penalty("제3기갑여단이 전차 8대를 격파", source)
+    assert p > 0.0
+    # no checkable facts -> no penalty
+    assert ungrounded_fact_penalty("적이 이동 중이다", source) == 0.0
+
+
+def test_hallucination_lowers_reward_for_invented_units():
+    cfg = RewardConfig()
+    source = "제1기계화보병대대가 전차 2대를 파괴하였음"
+    faithful = compute_reward("제1기계화보병대대가 전차 2대를 파괴", source, [], [], cfg)
+    invented = compute_reward("제3기갑여단이 전차 8대를 격파", source, [], [], cfg)
+    assert invented.hallucination > faithful.hallucination
+    assert invented.total < faithful.total
+
+
 def test_faithfulness_drops_single_char_noise():
     fm = LexicalFaithfulness()
     # 1-char tokens are ignored; only content tokens (>=2 chars) count.
@@ -197,6 +218,7 @@ def test_balance_content_off_by_default_is_unchanged():
         + cfg.w_contrast * bd.contrast
         - cfg.w_length * bd.length_penalty
         - cfg.w_copy * bd.copy_penalty
+        - cfg.w_hallucination * bd.hallucination
     )
     assert math.isclose(bd.total, expected, rel_tol=1e-9)
 

@@ -68,6 +68,7 @@ class RewardConfig:
     w_contrast: float = 0.5  # PMI contrast (source vs. prior); trains weight `a`
     w_length: float = 0.2
     w_copy: float = 1.0  # penalty for verbatim source copying (anti-reward-hacking)
+    w_hallucination: float = 1.0  # penalty for inventing units/quantities absent from source
     target_length: int = 120  # tokens; overage penalized
     repeat_ngram: int = 3  # n-gram size for repetition penalty
     copy_ngram: int = 4  # n-gram size for the extractive-copy penalty

@@ -14,9 +14,9 @@ def _grpo_metrics():
     return GRPOMetrics(
         step=3, loss=-0.5, mean_reward=2.1, faithfulness=0.4, coverage=0.6,
         term_usage=0.5, key_sentence=0.5, contrast=3.2, length_penalty=0.1,
-        copy_penalty=0.2, mean_len=18.0, weight_a=0.55, weight_b=0.3,
-        weight_c=0.33, weight_d=0.37, kl=0.02, clip_frac=0.1, entropy=1.05,
-        grad_norm=0.8, lr=2e-3,
+        copy_penalty=0.2, hallucination=0.15, mean_len=18.0, weight_a=0.55,
+        weight_b=0.3, weight_c=0.33, weight_d=0.37, kl=0.02, clip_frac=0.1,
+        entropy=1.05, grad_norm=0.8, lr=2e-3,
     )
 
 
