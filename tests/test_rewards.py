@@ -141,6 +141,9 @@ def test_ungrounded_fact_penalty_flags_invented_units_and_numbers():
     assert p > 0.0
     # no checkable facts -> no penalty
     assert ungrounded_fact_penalty("적이 이동 중이다", source) == 0.0
+    # fabricated year (2026 -> 2023) is flagged; keeping the real year is not
+    assert ungrounded_fact_penalty("SITREP-2023 보고", "보고번호 SITREP-2026") > 0.0
+    assert ungrounded_fact_penalty("SITREP-2026 보고", "보고번호 SITREP-2026") == 0.0
 
 
 def test_hallucination_lowers_reward_for_invented_units():

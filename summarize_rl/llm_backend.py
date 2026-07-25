@@ -208,6 +208,7 @@ class HFBackend(LLMBackend):
         compile_decode: bool = False,
         max_seq_len: int = 2048,
         trust_remote_code: bool = False,
+        use_chat_template: bool = True,
     ):
         """attn_implementation: None (transformers default) | "sdpa" |
         "flash_attention_2" | "eager". Default "sdpa" is built into PyTorch
@@ -248,6 +249,15 @@ class HFBackend(LLMBackend):
         self.pad_token_id = pad if pad is not None else self.eos_token_id
         # Left-pad so the last position aligns across branches after prefill.
         self.tokenizer.padding_side = "left"
+
+        # Wrap each branch prompt in the model's chat template when it has one
+        # (instruct models like EXAONE). Without it the raw "[원문]…[지시]…" text
+        # gives no turn structure, so the model rambles and never emits EOS —
+        # producing over-long, duplicated summaries. With it the model answers a
+        # single user turn and stops. No-op for base models with no template.
+        self.use_chat_template = (
+            use_chat_template and getattr(self.tokenizer, "chat_template", None) is not None
+        )
 
         self.compile_decode = compile_decode
         self.max_seq_len = max_seq_len
@@ -294,6 +304,20 @@ class HFBackend(LLMBackend):
                     print(f"[info] attn_implementation={impl} 미설치/미지원 → 다음 커널로 폴백")
         raise last_err  # type: ignore[misc]
 
+    def _wrap(self, text: str) -> str:
+        """Format `text` as a single user turn via the chat template (if any)."""
+        if not self.use_chat_template:
+            return text
+        return self.tokenizer.apply_chat_template(
+            [{"role": "user", "content": text}],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+
+    def _branch_list(self, branch_texts: dict[str, str]) -> list[str]:
+        """Ordered, chat-template-wrapped branch prompts."""
+        return [self._wrap(branch_texts[name]) for name in BRANCH_ORDER]
+
     def start(self, branch_texts: dict[str, str]) -> tuple[Any, StepOutput]:
         if self.compile_decode:
             return self._start_static(branch_texts)
@@ -308,7 +332,7 @@ class HFBackend(LLMBackend):
 
     @torch.no_grad()
     def _start_dynamic(self, branch_texts: dict[str, str]) -> tuple[Any, StepOutput]:
-        texts = [branch_texts[name] for name in BRANCH_ORDER]
+        texts = self._branch_list(branch_texts)
         enc = self.tokenizer(
             texts, return_tensors="pt", padding=True
         ).to(self.device)
@@ -355,7 +379,7 @@ class HFBackend(LLMBackend):
 
     @torch.no_grad()
     def start_batch(self, branch_texts: dict[str, str], n: int) -> tuple[Any, StepOutput]:
-        texts = [branch_texts[name] for name in BRANCH_ORDER]
+        texts = self._branch_list(branch_texts)
         enc = self.tokenizer(texts, return_tensors="pt", padding=True).to(self.device)
         input_ids = enc["input_ids"].repeat(n, 1)          # [4N, L]
         attention_mask = enc["attention_mask"].repeat(n, 1)  # [4N, L]
@@ -403,7 +427,7 @@ class HFBackend(LLMBackend):
     def _start_static(self, branch_texts: dict[str, str]) -> tuple[Any, StepOutput]:
         from transformers import StaticCache
 
-        texts = [branch_texts[name] for name in BRANCH_ORDER]
+        texts = self._branch_list(branch_texts)
         enc = self.tokenizer(texts, return_tensors="pt", padding=True).to(self.device)
         input_ids, attn = enc["input_ids"], enc["attention_mask"]
         b, prompt_len = input_ids.shape
@@ -463,7 +487,7 @@ class HFBackend(LLMBackend):
     @torch.no_grad()
     def generate_text(self, prompt: str, max_new_tokens: int = 256) -> str:
         """Greedy text generation for an arbitrary prompt (key-sentence extraction)."""
-        enc = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        enc = self.tokenizer(self._wrap(prompt), return_tensors="pt").to(self.device)
         out = self.model.generate(
             input_ids=enc["input_ids"],
             attention_mask=enc.get("attention_mask"),

@@ -110,11 +110,14 @@ def main() -> None:
     p.add_argument("--glossary", default=None)
     p.add_argument("--trust-remote-code", dest="trust_remote_code", action="store_true", default=False,
                    help="allow custom modeling code from the HF repo (needed for EXAONE etc.)")
+    p.add_argument("--no-chat-template", dest="use_chat_template", action="store_false", default=True,
+                   help="do NOT wrap prompts in the model's chat template (on by default).")
     args = p.parse_args()
 
     torch.manual_seed(0)
     backend = HFBackend(args.model, device=args.device, dtype=args.dtype,
-                        trust_remote_code=args.trust_remote_code)
+                        trust_remote_code=args.trust_remote_code,
+                        use_chat_template=args.use_chat_template)
     cfg = Config()
     cfg.policy.llm_hidden_size = backend.hidden_size
     cfg.decode.eos_token_id = backend.eos_token_id

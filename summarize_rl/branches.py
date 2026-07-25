@@ -31,7 +31,11 @@ class Example:
 
     source: str  # X: concatenated child-node source text
     triplets: list[Triplet] = field(default_factory=list)
-    query: str = "다음 내용을 군사 표준용어를 사용하여 요약하시오."
+    query: str = (
+        "다음 보고서를 군사 표준용어로 핵심만 간결하게 한 번만 요약하라. "
+        "원문에 있는 부대·수치·지명만 사용하고 없는 내용은 지어내지 마라. "
+        "보고번호·DTG 같은 서식 머리말은 생략하고 상황·조치·건의 위주로 작성하라."
+    )
 
 
 @dataclass

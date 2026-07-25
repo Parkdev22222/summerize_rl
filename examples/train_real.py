@@ -97,6 +97,9 @@ def main() -> None:
     p.add_argument("--trust-remote-code", dest="trust_remote_code", action="store_true", default=False,
                    help="allow custom modeling code from the HF repo (needed for EXAONE and other "
                         "models that ship their own architecture).")
+    p.add_argument("--no-chat-template", dest="use_chat_template", action="store_false", default=True,
+                   help="do NOT wrap branch prompts in the model's chat template. On by default for "
+                        "instruct models (EXAONE) so they emit one clean summary and stop.")
     p.add_argument("--steps", type=int, default=None, help="override total_steps")
     p.add_argument("--lr", type=float, default=None, help="override learning rate")
     p.add_argument("--num-samples", type=int, default=None, help="rollouts per input (self-critical)")
@@ -140,6 +143,7 @@ def main() -> None:
         args.model, device=args.device, dtype=args.dtype,
         attn_implementation=args.attn, compile_decode=args.compile_decode,
         max_seq_len=args.max_seq_len, trust_remote_code=args.trust_remote_code,
+        use_chat_template=args.use_chat_template,
     )
 
     # --- config, synced to the backbone ----------------------------------

@@ -119,6 +119,7 @@ def build_summarizer(args) -> tuple[Summarizer, Config]:
         max_new_tokens=args.max_new_tokens,
         min_new_tokens=args.min_new_tokens,
         trust_remote_code=args.trust_remote_code,
+        use_chat_template=args.use_chat_template,
     )
     print(
         f"model={args.model} dtype={args.dtype} device={args.device} "
@@ -193,6 +194,8 @@ def main() -> None:
                    help="static cache/mask length bound for --compile (prompt+generation)")
     p.add_argument("--trust-remote-code", dest="trust_remote_code", action="store_true", default=False,
                    help="allow custom modeling code from the HF repo (needed for EXAONE etc.)")
+    p.add_argument("--no-chat-template", dest="use_chat_template", action="store_false", default=True,
+                   help="do NOT wrap prompts in the model's chat template (on by default).")
     p.add_argument("--query", default=DEFAULT_QUERY, help="summarization instruction")
     p.add_argument("--max-new-tokens", type=int, default=None)
     p.add_argument("--min-new-tokens", type=int, default=None)

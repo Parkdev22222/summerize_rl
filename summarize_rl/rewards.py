@@ -215,6 +215,7 @@ def extractive_copy(summary: str, source: str, n: int = 4) -> float:
 _FACT_RE = re.compile(
     r"제?\s*\d*\s*[가-힣]{0,8}?(?:여단|대대|중대|소대|사단|연대|전투단|편대|전대)"
     r"|\d[\d,]*\s*(?:대|명|발|문|정|기|km|m|여단|대대|중대|소대)"
+    r"|(?:19|20)\d{2}"  # 4-digit year (e.g. a summary changing 2026 -> 2023)
 )
 
 
