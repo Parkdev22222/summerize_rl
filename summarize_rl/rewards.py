@@ -160,26 +160,35 @@ def term_usage(summary: str, active_terms: list[str], source: str | None = None)
     return hit / len(target)
 
 
-def key_sentence_coverage(summary: str, key_sentences: list[str]) -> float:
-    """How much of the LLM-picked key sentences the summary reflects, in [0, 1].
+def key_sentence_coverage(
+    summary: str,
+    key_sentences: "list[str] | list[tuple[str, float]]",
+) -> float:
+    """How much of the key sentences the summary reflects, in [0, 1].
 
     For each key sentence, the fraction of its content tokens (>=2 chars) that
-    appear in the summary; averaged over the key sentences. A recall-style
-    anchor to the source's *salient* content (complements triplet coverage,
-    which only checks structured entities). Vacuously 1.0 if no key sentences.
+    appear in the summary (whitespace-insensitive). Key sentences may be plain
+    strings (equal weight) or ``(sentence, weight)`` pairs; with weights the
+    result is a *weighted* average, so reflecting the high-importance military
+    events counts more than routine lines. A recall-style anchor to the source's
+    salient content (complements triplet coverage, which only checks structured
+    entities). Vacuously 1.0 if no key sentences.
     """
     if not key_sentences:
         return 1.0
     summary_norm = summary.lower()
     summ_ns = _nospace(summary_norm)
-    scores = []
-    for sent in key_sentences:
+    num = 0.0
+    den = 0.0
+    for item in key_sentences:
+        sent, weight = item if isinstance(item, (tuple, list)) else (item, 1.0)
         toks = [t for t in tokenize(sent) if len(t) >= 2]
         if not toks:
             continue
         grounded = sum(1 for t in toks if t in summary_norm or t in summ_ns)
-        scores.append(grounded / len(toks))
-    return sum(scores) / len(scores) if scores else 1.0
+        num += weight * (grounded / len(toks))
+        den += weight
+    return num / den if den else 1.0
 
 
 def extractive_copy(summary: str, source: str, n: int = 4) -> float:
