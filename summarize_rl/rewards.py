@@ -138,17 +138,26 @@ def triplet_coverage(summary: str, triplets: list[Triplet]) -> float:
     return sum(scores) / len(scores) if scores else 1.0
 
 
-def term_usage(summary: str, active_terms: list[str], source: str | None = None) -> float:
+def term_usage(
+    summary: str,
+    active_terms: list[str],
+    source: str | None = None,
+    credit_in_source: bool = False,
+) -> float:
     """Fraction of *standardization-worthy* active terms used in the summary.
 
-    When `source` is given, only credit standard terms that are NOT already
-    verbatim in the source: those are the ones the glossary (GQ) branch has to
-    inject, so copying the source cannot earn this reward. Without `source`,
+    When `source` is given and `credit_in_source` is False (default), only
+    credit standard terms that are NOT already verbatim in the source: those are
+    the ones the glossary (GQ) branch has to inject, so copying the source
+    cannot earn this reward, and the term is rewarded as a genuine plain->jargon
+    conversion. With `credit_in_source=True` every active term is credited
+    whether or not it is already in the source -- reward the summary for *using*
+    the jargon regardless (for already-jargon-heavy corpora). Without `source`,
     falls back to crediting every active term (legacy behavior).
     """
     if not active_terms:
         return 1.0  # no term to use -> vacuously complete
-    if source is not None:
+    if source is not None and not credit_in_source:
         src_norm = source.lower()
         target = [t for t in active_terms if not _contains(src_norm, t)]
         if not target:
@@ -228,7 +237,10 @@ def compute_reward(
     fm = faithfulness_model or LexicalFaithfulness()
     faith = float(fm.score(summary, source))
     cov = triplet_coverage(summary, triplets)
-    term = term_usage(summary, active_terms, source=source)
+    term = term_usage(
+        summary, active_terms, source=source,
+        credit_in_source=config.term_credit_in_source,
+    )
     n_tokens = summary_length if summary_length is not None else len(tokenize(summary))
     lpen = length_penalty(n_tokens, config, summary)
     copy = extractive_copy(summary, source, n=config.copy_ngram)
