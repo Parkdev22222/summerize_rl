@@ -112,6 +112,11 @@ def main() -> None:
     p.add_argument("--balance-content", dest="balance_content", action="store_true", default=False,
                    help="gate fluency terms (faith/term/contrast) by content recall (cov+keysent) "
                         "to stop fluent-but-off-topic summaries from winning. Off by default.")
+    p.add_argument("--term-credit-in-source", dest="term_credit_in_source",
+                   action="store_true", default=False,
+                   help="credit a jargon term even if it is already in the source (reward *using* "
+                        "the term regardless). Default off = only credit genuine plain->jargon "
+                        "conversion (term absent from source).")
     p.add_argument("--keysent-n", type=int, default=None,
                    help="how many source key sentences the LLM extracts for the key-sentence "
                         "reward (RewardConfig.keysent_n; default 3). Set 0 to disable the term.")
@@ -168,6 +173,7 @@ def main() -> None:
     if args.clip_eps is not None:
         cfg.grpo.clip_eps = args.clip_eps
     cfg.reward.balance_content = args.balance_content
+    cfg.reward.term_credit_in_source = args.term_credit_in_source
     if args.keysent_n is not None:
         cfg.reward.keysent_n = args.keysent_n
     if args.keysent_max_new_tokens is not None:

@@ -39,6 +39,18 @@ def test_format_glossary_empty():
     assert format_glossary([]) == ""
 
 
+def test_format_glossary_shows_plain_to_jargon_substitution():
+    # A term activated by a plain trigger renders as "trigger→term" so the GQ
+    # branch reads as a rewrite instruction.
+    active = [ActiveTerm("COA", matched_triggers=["방책"]),
+              ActiveTerm("UAV", matched_triggers=["드론", "무인기"])]
+    out = format_glossary(active)
+    assert "방책→COA" in out
+    assert "드론/무인기→UAV" in out
+    # A term matched by its own name only (no plain trigger) shows just the term.
+    assert format_glossary([ActiveTerm("SAM", matched_triggers=["SAM"])]).endswith("SAM")
+
+
 def test_build_branches_contains_parts():
     ex = Example(
         source="적 부대가 이동 중이다.",

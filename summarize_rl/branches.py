@@ -64,10 +64,22 @@ def serialize_triplets(triplets: list[Triplet], group_by_head: bool = True) -> s
 
 
 def format_glossary(active: list[ActiveTerm]) -> str:
-    """Format gated glossary terms into the G branch text."""
+    """Format gated glossary terms into the G branch text.
+
+    When a term was activated by a *plain-language* trigger (e.g. the source
+    said "드론"/"방책"), show the substitution explicitly as ``트리거→표준용어``
+    (드론→UAV, 방책→COA). This turns the GQ branch from a bare term list into a
+    rewrite instruction, so the frozen LLM actually biases toward emitting the
+    jargon at that position (the policy can only amplify what a branch makes
+    probable). Terms activated by their own name fall back to just the term.
+    """
     if not active:
         return ""
-    return "표준용어: " + ", ".join(t.term for t in active)
+    pairs: list[str] = []
+    for t in active:
+        plain = [g for g in t.matched_triggers if g != t.term]
+        pairs.append(f"{'/'.join(plain)}→{t.term}" if plain else t.term)
+    return "다음 표현을 군사 표준용어로 바꿔 표현하라: " + ", ".join(pairs)
 
 
 def build_branches(
