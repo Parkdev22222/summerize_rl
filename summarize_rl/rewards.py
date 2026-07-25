@@ -89,6 +89,7 @@ class RewardBreakdown:
     contrast: float
     length_penalty: float
     copy_penalty: float
+    hallucination: float
     total: float
 
 
@@ -209,6 +210,36 @@ def extractive_copy(summary: str, source: str, n: int = 4) -> float:
     return copied / len(s_ngrams)
 
 
+# Checkable "facts" a military summary must not invent: unit designations
+# (제1기계화보병대대, 3중대, 기갑여단) and quantities (전차 4대, 40발, 800m).
+_FACT_RE = re.compile(
+    r"제?\s*\d*\s*[가-힣]{0,8}?(?:여단|대대|중대|소대|사단|연대|전투단|편대|전대)"
+    r"|\d[\d,]*\s*(?:대|명|발|문|정|기|km|m|여단|대대|중대|소대)"
+)
+
+
+def ungrounded_fact_penalty(summary: str, source: str) -> float:
+    """Fraction of the summary's checkable facts NOT grounded in the source, [0,1].
+
+    Precision anchor against hallucination: extracts unit designations and
+    quantities from the summary and checks each against the source (whitespace-
+    and comma-insensitive). A summary that invents a unit ("제3기갑여단") or a
+    number ("전차 8대") that never appears in the source is penalized, which the
+    recall-style anchors (coverage, key sentences) do not do. 0.0 when the
+    summary states no checkable facts.
+    """
+    def _norm(text: str) -> str:
+        return re.sub(r"[\s,]", "", text.lower())
+
+    src = _norm(source)
+    facts = {_norm(m) for m in _FACT_RE.findall(summary)}
+    facts = {f for f in facts if len(f) >= 2}
+    if not facts:
+        return 0.0
+    ungrounded = sum(1 for f in facts if f not in src)
+    return ungrounded / len(facts)
+
+
 def length_penalty(summary_tokens: int, config: RewardConfig, summary: str) -> float:
     """Overlength + n-gram repetition penalty (>= 0)."""
     over = max(0, summary_tokens - config.target_length) / max(config.target_length, 1)
@@ -241,6 +272,7 @@ def compute_reward(
     n_tokens = summary_length if summary_length is not None else len(tokenize(summary))
     lpen = length_penalty(n_tokens, config, summary)
     copy = extractive_copy(summary, source, n=config.copy_ngram)
+    hallu = ungrounded_fact_penalty(summary, source)
     # key_sentences is None when disabled/unavailable -> no contribution (0).
     keysent = key_sentence_coverage(summary, key_sentences) if key_sentences else 0.0
 
@@ -271,6 +303,7 @@ def compute_reward(
         + config.w_keysent * keysent
         - config.w_length * lpen
         - config.w_copy * copy
+        - config.w_hallucination * hallu
     )
     return RewardBreakdown(
         faithfulness=faith,
@@ -280,6 +313,7 @@ def compute_reward(
         contrast=contrast,
         length_penalty=lpen,
         copy_penalty=copy,
+        hallucination=hallu,
         total=total,
     )
 

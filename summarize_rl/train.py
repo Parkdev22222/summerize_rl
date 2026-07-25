@@ -91,6 +91,7 @@ class StepMetrics:
     entropy: float
     grad_norm: float
     lr: float
+    hallucination: float = 0.0
 
 
 class SCSTTrainer:
@@ -241,6 +242,7 @@ class SCSTTrainer:
             "coverage": sum(bd.coverage for bd in breakdowns) / k,
             "term_usage": sum(bd.term_usage for bd in breakdowns) / k,
             "key_sentence": sum(bd.key_sentence for bd in breakdowns) / k,
+            "hallucination": sum(bd.hallucination for bd in breakdowns) / k,
             "contrast": sum(bd.contrast for bd in breakdowns) / k,
             "length_penalty": sum(bd.length_penalty for bd in breakdowns) / k,
             "copy_penalty": sum(bd.copy_penalty for bd in breakdowns) / k,
@@ -284,8 +286,8 @@ class SCSTTrainer:
             **{k: agg[k] for k in (
                 "mean_reward", "faithfulness", "coverage", "term_usage",
                 "key_sentence", "contrast", "length_penalty", "copy_penalty",
-                "mean_len", "weight_a", "weight_b", "weight_c", "weight_d",
-                "entropy",
+                "hallucination", "mean_len", "weight_a", "weight_b", "weight_c",
+                "weight_d", "entropy",
             )},
         )
         return metrics
