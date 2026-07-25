@@ -32,7 +32,8 @@ from examples.summarize import DEFAULT_QUERY, print_summary, read_source
 
 HELP = """\
 명령어:
-  (원문 붙여넣기 후 빈 줄)  원문을 서버에 보내 요약
+  (원문 붙여넣기 후, 마침표(.)만 있는 줄)  원문을 서버에 보내 요약
+       ※ 빈 줄로는 제출되지 않습니다(문단 사이 빈 줄이 있어도 하나의 원문). 끝에 . 한 줄.
   :query <지시문>           요약 지시문(query) 변경 (클라이언트 측)
   :baseline <on|off>        순수 LLM(제안 방식 아님) 요약도 함께 표시 (기본 on)
   :ckpt <경로>              서버가 다른 체크포인트를 재로드하도록 요청

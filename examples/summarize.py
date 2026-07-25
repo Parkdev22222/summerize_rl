@@ -36,7 +36,8 @@ DEFAULT_QUERY = Example.__dataclass_fields__["query"].default
 
 HELP = """\
 명령어:
-  (원문 붙여넣기 후 빈 줄)  붙여넣은 원문을 요약
+  (원문 붙여넣기 후, 마침표(.)만 있는 줄)  붙여넣은 원문을 요약
+       ※ 빈 줄로는 제출되지 않습니다(문단 사이 빈 줄이 있어도 하나의 원문). 끝에 . 한 줄.
   :query <지시문>           요약 지시문(query) 변경
   :ckpt <경로>              다른 체크포인트 가중치 재로드
   :help                     이 도움말
@@ -56,10 +57,16 @@ def load_glossary(path: str | None) -> Glossary:
 
 
 def read_source(prompt: str = "원문> ") -> str | list[str] | None:
-    """Read a multi-line source block (ends on a blank line) or a ``:`` command.
+    """Read a multi-line source block, ended by a line containing only ``.``.
+
+    A single blank line does NOT submit: real reports contain blank lines
+    between paragraphs, and submitting on the first one split one pasted source
+    into several — producing a separate summary per paragraph. The block is
+    submitted only on an explicit end marker (a lone ``.``) or EOF (Ctrl-D), so
+    one paste is exactly one source.
 
     Returns:
-      * ``None`` on EOF (Ctrl-D),
+      * ``None`` on EOF (Ctrl-D) at the start,
       * ``[":command", "args"]`` when the first non-empty line is a command,
       * the joined source text otherwise.
     """
@@ -71,17 +78,17 @@ def read_source(prompt: str = "원문> ") -> str | list[str] | None:
         except EOFError:
             if first:
                 return None
-            break
-        if first and line.strip().startswith(":"):
-            return line.strip().split(maxsplit=1)
-        if line.strip() == "":
-            if first:
-                # Ignore leading blank lines; keep waiting for input.
-                continue
-            break
-        lines.append(line)
+            break  # Ctrl-D also submits what's been typed
+        stripped = line.strip()
+        if first and stripped.startswith(":"):
+            return stripped.split(maxsplit=1)
+        if stripped == ".":
+            break  # explicit end-of-source marker
+        if first and stripped == "":
+            continue  # ignore leading blank lines; keep waiting
+        lines.append(line)  # blank lines inside the source are preserved
         first = False
-    return "\n".join(lines)
+    return "\n".join(lines).strip()
 
 
 def print_summary(result) -> None:
