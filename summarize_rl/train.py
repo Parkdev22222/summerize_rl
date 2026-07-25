@@ -30,6 +30,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from .branches import Example, build_branches
 from .config import Config
 from .decoder import Rollout, generate, generate_batch
+from .judge import BackboneJudge
 from .keysent import KeySentenceExtractor
 from .glossary import Glossary
 from .llm_backend import LLMBackend
@@ -92,6 +93,7 @@ class StepMetrics:
     grad_norm: float
     lr: float
     hallucination: float = 0.0
+    judge: float = 0.0
 
 
 class SCSTTrainer:
@@ -113,6 +115,9 @@ class SCSTTrainer:
         self.generator = generator
         self.key_extractor = (
             KeySentenceExtractor(config.reward) if config.reward.w_keysent > 0 else None
+        )
+        self.judge = (
+            BackboneJudge(backend, config.reward) if config.reward.w_judge > 0 else None
         )
 
         freeze_llm(backend)
@@ -158,6 +163,7 @@ class SCSTTrainer:
                 summary_length=r.length,
                 contrast=r.mean_contrast(),
                 key_sentences=key_sents,
+                judge_model=self.judge,
             )
             for r in rollouts
         ]
@@ -186,6 +192,7 @@ class SCSTTrainer:
             summary_length=r.length,
             contrast=r.mean_contrast(),
             key_sentences=self._key_sentences(example),
+            judge_model=self.judge,
         )
         return bd.total
 
@@ -243,6 +250,7 @@ class SCSTTrainer:
             "term_usage": sum(bd.term_usage for bd in breakdowns) / k,
             "key_sentence": sum(bd.key_sentence for bd in breakdowns) / k,
             "hallucination": sum(bd.hallucination for bd in breakdowns) / k,
+            "judge": sum(bd.judge for bd in breakdowns) / k,
             "contrast": sum(bd.contrast for bd in breakdowns) / k,
             "length_penalty": sum(bd.length_penalty for bd in breakdowns) / k,
             "copy_penalty": sum(bd.copy_penalty for bd in breakdowns) / k,
@@ -286,8 +294,8 @@ class SCSTTrainer:
             **{k: agg[k] for k in (
                 "mean_reward", "faithfulness", "coverage", "term_usage",
                 "key_sentence", "contrast", "length_penalty", "copy_penalty",
-                "hallucination", "mean_len", "weight_a", "weight_b", "weight_c",
-                "weight_d", "entropy",
+                "hallucination", "judge", "mean_len", "weight_a", "weight_b",
+                "weight_c", "weight_d", "entropy",
             )},
         )
         return metrics

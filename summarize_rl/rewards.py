@@ -56,6 +56,12 @@ class FaithfulnessModel(Protocol):
     def score(self, summary: str, source: str) -> float: ...
 
 
+class JudgeModel(Protocol):
+    """LLM-as-judge: score how faithfully `summary` reports `source`, [0,1] | None."""
+
+    def score(self, source: str, summary: str) -> float | None: ...
+
+
 class LexicalFaithfulness:
     """Dependency-free fallback: fraction of summary *content* tokens grounded.
 
@@ -90,6 +96,7 @@ class RewardBreakdown:
     length_penalty: float
     copy_penalty: float
     hallucination: float
+    judge: float
     total: float
 
 
@@ -265,6 +272,7 @@ def compute_reward(
     summary_length: int | None = None,
     contrast: float = 0.0,
     key_sentences: list[str] | None = None,
+    judge_model: JudgeModel | None = None,
 ) -> RewardBreakdown:
     fm = faithfulness_model or LexicalFaithfulness()
     faith = float(fm.score(summary, source))
@@ -274,6 +282,12 @@ def compute_reward(
     lpen = length_penalty(n_tokens, config, summary)
     copy = extractive_copy(summary, source, n=config.copy_ngram)
     hallu = ungrounded_fact_penalty(summary, source)
+    # LLM-judge accuracy score (0 contribution when no judge / score unavailable).
+    judge = 0.0
+    if judge_model is not None and config.w_judge > 0:
+        js = judge_model.score(source, summary)
+        if js is not None:
+            judge = float(js)
     # key_sentences is None when disabled/unavailable -> no contribution (0).
     keysent = key_sentence_coverage(summary, key_sentences) if key_sentences else 0.0
 
@@ -305,6 +319,7 @@ def compute_reward(
         - config.w_length * lpen
         - config.w_copy * copy
         - config.w_hallucination * hallu
+        + config.w_judge * judge
     )
     return RewardBreakdown(
         faithfulness=faith,
@@ -315,6 +330,7 @@ def compute_reward(
         length_penalty=lpen,
         copy_penalty=copy,
         hallucination=hallu,
+        judge=judge,
         total=total,
     )
 

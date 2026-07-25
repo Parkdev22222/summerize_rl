@@ -118,6 +118,10 @@ def main() -> None:
     p.add_argument("--balance-content", dest="balance_content", action="store_true", default=False,
                    help="gate fluency terms (faith/term/contrast) by content recall (cov+keysent) "
                         "to stop fluent-but-off-topic summaries from winning. Off by default.")
+    p.add_argument("--w-judge", type=float, default=None,
+                   help="weight of the LLM-as-judge accuracy reward (0=off, default). >0 builds a "
+                        "BackboneJudge from the frozen model: catches semantic errors lexical terms "
+                        "miss (e.g. 소대 vs 소총중대), at ~1 extra generation per rollout (slower).")
     p.add_argument("--keysent-n", type=int, default=None,
                    help="how many source key sentences the LLM extracts for the key-sentence "
                         "reward (RewardConfig.keysent_n; default 3). Set 0 to disable the term.")
@@ -175,6 +179,8 @@ def main() -> None:
     if args.clip_eps is not None:
         cfg.grpo.clip_eps = args.clip_eps
     cfg.reward.balance_content = args.balance_content
+    if args.w_judge is not None:
+        cfg.reward.w_judge = args.w_judge
     if args.keysent_n is not None:
         cfg.reward.keysent_n = args.keysent_n
     if args.keysent_max_new_tokens is not None:

@@ -146,6 +146,29 @@ def test_ungrounded_fact_penalty_flags_invented_units_and_numbers():
     assert ungrounded_fact_penalty("SITREP-2026 보고", "보고번호 SITREP-2026") == 0.0
 
 
+def test_llm_judge_enters_reward_when_enabled():
+    # A pluggable judge adds w_judge * score; off (w_judge=0) contributes nothing.
+    class StubJudge:
+        def __init__(self, v):
+            self.v = v
+        def score(self, source, summary):
+            return self.v
+
+    cfg = RewardConfig(w_judge=0.5)
+    kw = dict(source="적 부대 이동", triplets=[], active_terms=[], config=cfg)
+    hi = compute_reward("적 부대 이동", judge_model=StubJudge(0.9), **kw)
+    lo = compute_reward("적 부대 이동", judge_model=StubJudge(0.1), **kw)
+    assert hi.judge == 0.9 and lo.judge == 0.1
+    assert math.isclose(hi.total - lo.total, 0.5 * (0.9 - 0.1), rel_tol=1e-6)
+    # judge=None or w_judge=0 -> no contribution
+    off = compute_reward("적 부대 이동", judge_model=None, **kw)
+    assert off.judge == 0.0
+    cfg0 = RewardConfig(w_judge=0.0)
+    ignored = compute_reward("적 부대 이동", source="적 부대 이동", triplets=[],
+                             active_terms=[], config=cfg0, judge_model=StubJudge(0.9))
+    assert ignored.judge == 0.0  # w_judge=0 -> judge not even queried
+
+
 def test_hallucination_lowers_reward_for_invented_units():
     cfg = RewardConfig()
     source = "제1기계화보병대대가 전차 2대를 파괴하였음"
@@ -222,6 +245,7 @@ def test_balance_content_off_by_default_is_unchanged():
         - cfg.w_length * bd.length_penalty
         - cfg.w_copy * bd.copy_penalty
         - cfg.w_hallucination * bd.hallucination
+        + cfg.w_judge * bd.judge
     )
     assert math.isclose(bd.total, expected, rel_tol=1e-9)
 

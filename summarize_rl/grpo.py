@@ -36,6 +36,7 @@ from .branches import Example, build_branches
 from .config import Config
 from .decoder import Rollout, generate_batch, score_tokens_batch
 from .glossary import Glossary
+from .judge import BackboneJudge
 from .keysent import KeySentenceExtractor
 from .llm_backend import LLMBackend
 from .policy import WeightPolicy
@@ -56,6 +57,7 @@ class GRPOMetrics:
     length_penalty: float
     copy_penalty: float
     hallucination: float
+    judge: float
     mean_len: float
     weight_a: float
     weight_b: float
@@ -99,6 +101,9 @@ class GRPOTrainer:
         self.generator = generator
         self.key_extractor = (
             KeySentenceExtractor(config.reward) if config.reward.w_keysent > 0 else None
+        )
+        self.judge = (
+            BackboneJudge(backend, config.reward) if config.reward.w_judge > 0 else None
         )
 
         freeze_llm(backend)
@@ -158,6 +163,7 @@ class GRPOTrainer:
                     summary_length=r.length,
                     contrast=r.mean_contrast(),
                     key_sentences=key_sents,
+                    judge_model=self.judge,
                 )
                 for r in rollouts
             ]
@@ -250,6 +256,7 @@ class GRPOTrainer:
             "term_usage": sum(bd.term_usage for bd in breakdowns) / k,
             "key_sentence": sum(bd.key_sentence for bd in breakdowns) / k,
             "hallucination": sum(bd.hallucination for bd in breakdowns) / k,
+            "judge": sum(bd.judge for bd in breakdowns) / k,
             "contrast": sum(bd.contrast for bd in breakdowns) / k,
             "length_penalty": sum(bd.length_penalty for bd in breakdowns) / k,
             "copy_penalty": sum(bd.copy_penalty for bd in breakdowns) / k,
@@ -303,8 +310,8 @@ class GRPOTrainer:
             **{k: reward_m[k] for k in (
                 "mean_reward", "faithfulness", "coverage", "term_usage",
                 "key_sentence", "contrast", "length_penalty", "copy_penalty",
-                "hallucination", "mean_len", "weight_a", "weight_b", "weight_c",
-                "weight_d",
+                "hallucination", "judge", "mean_len", "weight_a", "weight_b",
+                "weight_c", "weight_d",
             )},
         )
 

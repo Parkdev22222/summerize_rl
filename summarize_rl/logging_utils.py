@@ -28,6 +28,7 @@ _TAG_MAP = {
     "length_penalty": "reward/length_penalty",
     "copy_penalty": "reward/copy_penalty",
     "hallucination": "reward/hallucination",
+    "judge": "reward/judge",
     "mean_len": "misc/mean_len",
     "weight_a": "weights/a",
     "weight_b": "weights/b",

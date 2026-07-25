@@ -69,6 +69,13 @@ class RewardConfig:
     w_length: float = 0.2
     w_copy: float = 1.0  # penalty for verbatim source copying (anti-reward-hacking)
     w_hallucination: float = 1.0  # penalty for inventing units/quantities absent from source
+    # LLM-as-judge accuracy reward (judge.py). Off by default (w_judge=0) because
+    # it costs one extra LLM generation per scored summary. Set > 0 to add a
+    # semantic accuracy score (catches errors lexical terms miss, e.g. 소대 vs
+    # 소총중대). The trainers build a BackboneJudge (local frozen model) when
+    # w_judge>0; a custom JudgeModel (e.g. an external API) can be injected too.
+    w_judge: float = 0.0
+    judge_max_new_tokens: int = 8  # judge outputs only a 0-100 number
     target_length: int = 120  # tokens; overage penalized
     repeat_ngram: int = 3  # n-gram size for repetition penalty
     copy_ngram: int = 4  # n-gram size for the extractive-copy penalty
