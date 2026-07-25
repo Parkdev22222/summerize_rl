@@ -63,7 +63,7 @@ class RewardConfig:
 
     w_faithfulness: float = 1.0
     w_coverage: float = 2.0  # triplet-entity coverage: the main on-topic anchor
-    w_term: float = 0.5  # standard/jargon-term use; up-weighted to push plain->jargon
+    w_term: float = 0.25  # standard-term use; low so generic term-dropping can't win
     w_keysent: float = 1.0  # did the summary reflect the LLM-picked key sentences?
     w_contrast: float = 0.5  # PMI contrast (source vs. prior); trains weight `a`
     w_length: float = 0.2
@@ -71,13 +71,6 @@ class RewardConfig:
     target_length: int = 120  # tokens; overage penalized
     repeat_ngram: int = 3  # n-gram size for repetition penalty
     copy_ngram: int = 4  # n-gram size for the extractive-copy penalty
-    # Term-usage crediting. By default a standard term is only credited when it
-    # is NOT already verbatim in the source (rewards genuine plain->jargon
-    # conversion / injection, and stops source-copying from earning it). Set
-    # True to also credit jargon that is already in the source, i.e. reward the
-    # summary for *using* the term regardless -- useful on already-jargon-heavy
-    # corpora where you want the summary to retain/standardize the terminology.
-    term_credit_in_source: bool = False
     # Key-sentence extraction (used only when w_keysent > 0): the frozen LLM is
     # prompted once per source to pick the N most important sentences; the
     # summary is then rewarded for reflecting their content. Cached per source.

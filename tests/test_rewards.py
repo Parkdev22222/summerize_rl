@@ -112,25 +112,6 @@ def test_extractive_copy_detects_verbatim():
     assert extractive_copy("적 부대", src, n=4) == 0.0
 
 
-def test_term_usage_credit_in_source_rewards_retained_jargon():
-    # Default: jargon already in the source earns nothing (nothing to convert).
-    assert term_usage("적이 COA를 수행", ["COA"], source="적이 COA를 수행") == 1.0  # vacuous
-    # credit_in_source=True: the summary using the jargon IS rewarded even though
-    # the source already contains it (reward *using* the term).
-    assert term_usage("적이 COA를 수행", ["COA"], source="적이 COA를 실시",
-                      credit_in_source=True) == 1.0
-    assert term_usage("적이 방책을 실시", ["COA"], source="적이 COA를 실시",
-                      credit_in_source=True) == 0.0  # summary lacks the jargon
-
-
-def test_term_usage_plain_to_jargon_conversion():
-    # The intended use: source uses the plain word, summary must emit the jargon.
-    # 방책(plain, in source) activates COA; COA is absent from source -> credited
-    # only when the summary actually writes "COA".
-    assert term_usage("적 COA 분석", ["COA"], source="적 방책 분석") == 1.0
-    assert term_usage("적 방책 분석", ["COA"], source="적 방책 분석") == 0.0
-
-
 def test_term_usage_only_credits_non_source_terms():
     # "기동" is NOT in the source -> standardization worth crediting
     assert term_usage("기동을 실시", ["기동"], source="적이 이동했다") == 1.0
