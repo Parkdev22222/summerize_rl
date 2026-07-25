@@ -231,6 +231,40 @@ def test_key_sentence_coverage():
     assert key_sentence_coverage("아무말", []) == 1.0
 
 
+def test_key_sentence_coverage_weighted_prioritizes_important():
+    # (sentence, weight) pairs -> weighted average. Reflecting the high-weight
+    # military event scores higher than reflecting only the low-weight line.
+    ks = [("적 전차 4대를 파괴하였음", 3.0), ("보고번호는 SITREP 이다", 1.0)]
+    hit_important = key_sentence_coverage("아군이 적 전차 파괴", ks)
+    hit_trivial = key_sentence_coverage("보고번호 SITREP", ks)
+    assert hit_important > hit_trivial
+    # plain strings still work (equal weight) -> unchanged behavior
+    assert key_sentence_coverage("아무말", []) == 1.0
+
+
+def test_key_sentence_extractor_weights_military_events():
+    from summarize_rl.config import RewardConfig
+    from summarize_rl.keysent import KeySentenceExtractor, importance
+    from summarize_rl.llm_backend import MockBackend
+
+    # importance: a combat+casualty+quantity sentence outranks an admin line.
+    assert importance("1중대는 적 전차 2대를 파괴하였고 아군 1명이 전사함") > importance("보고번호 SITREP-2026")
+
+    cfg = RewardConfig(keysent_use_llm=False)  # rules-only -> deterministic
+    be = MockBackend(vocab_size=16, hidden_size=8, eos_token_id=1)
+    src = ("보고번호 SITREP-2026.\n"
+           "1중대는 적 전차 2대를 파괴하였고 아군 1명이 전사함.\n"
+           "날씨는 맑음.")
+    ks = KeySentenceExtractor(cfg).extract(be, src)
+    sents = [s for s, _ in ks]
+    # military event sentence is always included; non-military lines are dropped
+    assert any("전차" in s for s in sents)
+    assert not any("날씨" in s for s in sents)
+    assert not any("보고번호" in s for s in sents)
+    # its weight exceeds the base (1.0)
+    assert max(w for s, w in ks if "전차" in s) > 1.0
+
+
 def test_key_sentence_enters_total():
     cfg = RewardConfig(w_keysent=1.0)
     keys = ["갈도비아 블루포스", "레드포스 방어"]

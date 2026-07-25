@@ -76,6 +76,17 @@ class RewardConfig:
     # summary is then rewarded for reflecting their content. Cached per source.
     keysent_n: int = 3  # how many key sentences to ask the LLM for
     keysent_max_new_tokens: int = 256  # generation budget for extraction
+    # Military-importance weighting of key sentences (keysent.py). When on, every
+    # source sentence describing a military event / echelon status / casualty /
+    # request is ALWAYS a key sentence, weighted by its computed importance, so
+    # the key-sentence reward (a weighted average) makes reflecting the important
+    # events count more. keysent_use_llm additionally merges the LLM's salient
+    # picks; keysent_max caps the set; keysent_min_weight is the importance
+    # threshold for a sentence to count as "military".
+    keysent_importance: bool = True
+    keysent_use_llm: bool = True
+    keysent_min_weight: float = 1.0
+    keysent_max: int = 8
     norm_eps: float = 1e-8
     # Content gating (anti "fluent-but-off-topic"): when True, the fluency-style
     # components (faithfulness, term, contrast) are multiplied by how much source

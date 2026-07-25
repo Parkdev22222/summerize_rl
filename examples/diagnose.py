@@ -61,9 +61,10 @@ def run_diagnosis(
     key_sents = None
     if cfg.reward.w_keysent > 0:
         key_sents = KeySentenceExtractor(cfg.reward).extract(backend, example.source)
-        print("── LLM이 뽑은 핵심 문장 ──")
-        for i, s in enumerate(key_sents, 1):
-            print(f"  {i}. {s}")
+        print("── 핵심 문장 (군사 중요도 가중) ──")
+        for i, item in enumerate(key_sents, 1):
+            sent, weight = item if isinstance(item, (tuple, list)) else (item, 1.0)
+            print(f"  {i}. [{weight:.1f}] {sent}")
         print()
 
     # 1) RAW base model: feed the XQ prompt straight to the frozen LLM.
