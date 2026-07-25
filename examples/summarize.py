@@ -36,8 +36,8 @@ DEFAULT_QUERY = Example.__dataclass_fields__["query"].default
 
 HELP = """\
 명령어:
-  (원문 붙여넣기 후, 마침표(.)만 있는 줄)  붙여넣은 원문을 요약
-       ※ 빈 줄로는 제출되지 않습니다(문단 사이 빈 줄이 있어도 하나의 원문). 끝에 . 한 줄.
+  (원문 붙여넣기 후 Enter 2번=빈 줄 2번)  붙여넣은 원문을 요약
+       ※ 문단 사이 한 줄 공백은 원문의 일부로 유지됩니다(하나의 원문). 끝에 빈 줄 2번.
   :query <지시문>           요약 지시문(query) 변경
   :ckpt <경로>              다른 체크포인트 가중치 재로드
   :help                     이 도움말
@@ -57,13 +57,14 @@ def load_glossary(path: str | None) -> Glossary:
 
 
 def read_source(prompt: str = "원문> ") -> str | list[str] | None:
-    """Read a multi-line source block, ended by a line containing only ``.``.
+    """Read a multi-line source block, submitted by two blank lines (Enter x2).
 
-    A single blank line does NOT submit: real reports contain blank lines
-    between paragraphs, and submitting on the first one split one pasted source
-    into several — producing a separate summary per paragraph. The block is
-    submitted only on an explicit end marker (a lone ``.``) or EOF (Ctrl-D), so
-    one paste is exactly one source.
+    A *single* blank line is kept as a paragraph break — real reports (and ones
+    ending in "끝.") contain blank lines between sections, and submitting on the
+    first one split one pasted source into several, producing a summary per
+    paragraph. The block is submitted only on TWO consecutive blank lines or EOF
+    (Ctrl-D), and neither collides with report punctuation, so one paste is one
+    source.
 
     Returns:
       * ``None`` on EOF (Ctrl-D) at the start,
@@ -72,6 +73,7 @@ def read_source(prompt: str = "원문> ") -> str | list[str] | None:
     """
     lines: list[str] = []
     first = True
+    blanks = 0
     while True:
         try:
             line = input(prompt if first else "")
@@ -82,11 +84,16 @@ def read_source(prompt: str = "원문> ") -> str | list[str] | None:
         stripped = line.strip()
         if first and stripped.startswith(":"):
             return stripped.split(maxsplit=1)
-        if stripped == ".":
-            break  # explicit end-of-source marker
-        if first and stripped == "":
-            continue  # ignore leading blank lines; keep waiting
-        lines.append(line)  # blank lines inside the source are preserved
+        if stripped == "":
+            if first:
+                continue  # ignore leading blank lines; keep waiting
+            blanks += 1
+            if blanks >= 2:
+                break  # two consecutive blank lines -> submit
+            lines.append(line)  # keep a single blank as a paragraph break
+            continue
+        blanks = 0
+        lines.append(line)
         first = False
     return "\n".join(lines).strip()
 
