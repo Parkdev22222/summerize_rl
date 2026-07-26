@@ -28,6 +28,7 @@ from .glossary import Glossary
 from .llm_backend import LLMBackend
 from .policy import WeightPolicy
 from .train import freeze_llm
+from .triplet_extract import TripletExtractor
 
 
 @dataclass
@@ -61,11 +62,16 @@ class Summarizer:
         config: Config,
         *,
         glossary: Glossary | None = None,
+        triplet_extractor: "TripletExtractor | None" = None,
     ):
         self.backend = backend
         self.policy = policy
         self.config = config
         self.glossary = glossary
+        # When set, fills the SQ branch at inference by extracting triplets from
+        # the source (training had corpus triplets; without them the SQ-heavy
+        # policy fabricates). Only used when summarize() is called without triplets.
+        self.triplet_extractor = triplet_extractor
 
         freeze_llm(backend)
         self.policy.eval()
@@ -155,8 +161,12 @@ class Summarizer:
         """Summarize ``source`` under an instruction ``query`` (greedy decode).
 
         ``query`` defaults to the standard instruction on :class:`Example`.
-        ``triplets`` feed the SQ (core-info) branch; omit for source-only input.
+        ``triplets`` feed the SQ (core-info) branch. When omitted and a
+        ``triplet_extractor`` is set, triplets are extracted from the source so
+        the SQ branch is not empty (matching training).
         """
+        if triplets is None and self.triplet_extractor is not None:
+            triplets = self.triplet_extractor.extract(self.backend, source)
         active_terms, branch_texts = self._prepare(source, query, triplets)
 
         with torch.no_grad():
@@ -196,6 +206,7 @@ def build_hf_summarizer(
     min_new_tokens: int | None = None,
     trust_remote_code: bool = False,
     use_chat_template: bool = True,
+    extract_triplets: bool = True,
 ) -> tuple[Summarizer, Config, int]:
     """Build a real-backbone Summarizer and load a checkpoint. Returns (summarizer, config, step).
 
@@ -229,6 +240,8 @@ def build_hf_summarizer(
 
     dev = torch.device(device)
     policy = WeightPolicy(cfg.policy).to(dev)
-    summarizer = Summarizer(backend, policy, cfg, glossary=glossary)
+    extractor = TripletExtractor() if extract_triplets else None
+    summarizer = Summarizer(backend, policy, cfg, glossary=glossary,
+                            triplet_extractor=extractor)
     step = summarizer.load_checkpoint(ckpt)
     return summarizer, cfg, step
