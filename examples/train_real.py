@@ -122,9 +122,6 @@ def main() -> None:
                    help="weight of the LLM-as-judge accuracy reward (0=off, default). >0 builds a "
                         "BackboneJudge from the frozen model: catches semantic errors lexical terms "
                         "miss (e.g. 소대 vs 소총중대), at ~1 extra generation per rollout (slower).")
-    p.add_argument("--reward-weight", action="append", default=[], metavar="NAME=VALUE",
-                   help="override any RewardConfig field, e.g. --reward-weight w_term=0.1 "
-                        "--reward-weight w_coverage=2.5 (repeatable). Applied after other flags.")
     p.add_argument("--keysent-n", type=int, default=None,
                    help="how many source key sentences the LLM extracts for the key-sentence "
                         "reward (RewardConfig.keysent_n; default 3). Set 0 to disable the term.")
@@ -184,15 +181,6 @@ def main() -> None:
     cfg.reward.balance_content = args.balance_content
     if args.w_judge is not None:
         cfg.reward.w_judge = args.w_judge
-    for spec in args.reward_weight:
-        name, sep, value = spec.partition("=")
-        name = name.strip()
-        if not sep or not hasattr(cfg.reward, name):
-            raise SystemExit(f"--reward-weight: unknown or malformed '{spec}' "
-                             f"(expected NAME=VALUE where NAME is a RewardConfig field)")
-        cur = getattr(cfg.reward, name)
-        cast = type(cur) if not isinstance(cur, bool) else (lambda v: v.lower() in ("1", "true", "yes"))
-        setattr(cfg.reward, name, cast(value.strip()))
     if args.keysent_n is not None:
         cfg.reward.keysent_n = args.keysent_n
     if args.keysent_max_new_tokens is not None:
