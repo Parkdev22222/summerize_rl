@@ -51,7 +51,7 @@ class DecodeConfig:
 
     temperature: float = 1.0
     top_p: float = 0.95
-    max_new_tokens: int = 2048
+    max_new_tokens: int = 1024
     min_new_tokens: int = 20
     eos_token_id: int | None = None
     pad_token_id: int | None = None
@@ -75,7 +75,7 @@ class RewardConfig:
     # w_judge>0; a custom JudgeModel (e.g. an external API) can be injected too.
     w_judge: float = 0.0
     judge_max_new_tokens: int = 24  # room for a short preamble before the 0-100 number
-    target_length: int = 2048  # tokens; overage penalized (kept == decode.max_new_tokens)
+    target_length: int = 1024  # tokens; overage penalized (kept == decode.max_new_tokens)
     repeat_ngram: int = 3  # n-gram size for repetition penalty
     copy_ngram: int = 4  # n-gram size for the extractive-copy penalty
     # Key-sentence extraction (used only when w_keysent > 0): the frozen LLM is
