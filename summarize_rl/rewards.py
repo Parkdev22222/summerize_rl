@@ -57,9 +57,15 @@ class FaithfulnessModel(Protocol):
 
 
 class JudgeModel(Protocol):
-    """LLM-as-judge: score how faithfully `summary` reports `source`, [0,1] | None."""
+    """LLM-as-judge: score how faithfully `summary` reports `source`, [0,1] | None.
 
-    def score(self, source: str, summary: str) -> float | None: ...
+    ``key_sentences`` (optional) lets the judge score semantic reflection of the
+    source's important sentences.
+    """
+
+    def score(
+        self, source: str, summary: str, key_sentences: object | None = None
+    ) -> float | None: ...
 
 
 class LexicalFaithfulness:
@@ -283,7 +289,7 @@ def compute_reward(
     # LLM-judge accuracy score (0 contribution when no judge / score unavailable).
     judge = 0.0
     if judge_model is not None and config.w_judge > 0:
-        js = judge_model.score(source, summary)
+        js = judge_model.score(source, summary, key_sentences=key_sentences)
         if js is not None:
             judge = float(js)
     # key_sentences is None when disabled/unavailable -> no contribution (0).

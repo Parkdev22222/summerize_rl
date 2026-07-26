@@ -32,12 +32,31 @@ from .llm_backend import LLMBackend
 
 
 class JudgeModel(Protocol):
-    """Score how faithfully `summary` reports `source`, in [0, 1] (or None)."""
+    """Score how faithfully `summary` reports `source`, in [0, 1] (or None).
 
-    def score(self, source: str, summary: str) -> float | None: ...
+    ``key_sentences`` (optional) are the source's important sentences; when given
+    the judge should score whether the summary reflects them *semantically*
+    (paraphrase counts), complementing the cheap lexical key-sentence reward.
+    """
+
+    def score(
+        self, source: str, summary: str, key_sentences: object | None = None
+    ) -> float | None: ...
 
 
 _SCORE_RE = re.compile(r"\d{1,3}")
+
+
+def _keysent_texts(key_sentences: object | None) -> list[str]:
+    """Normalize key sentences (list[str] or list[(str, weight)]) to text strings."""
+    if not key_sentences:
+        return []
+    out: list[str] = []
+    for item in key_sentences:  # type: ignore[union-attr]
+        sent = item[0] if isinstance(item, (tuple, list)) else item
+        if isinstance(sent, str) and sent.strip():
+            out.append(sent.strip())
+    return out
 
 
 class BackboneJudge:
@@ -53,23 +72,34 @@ class BackboneJudge:
         self.max_new_tokens = config.judge_max_new_tokens
         self._cache: dict[tuple[str, str], float | None] = {}
 
-    def _prompt(self, source: str, summary: str) -> str:
+    def _prompt(self, source: str, summary: str, key_sentences: object | None = None) -> str:
+        ks_block = ""
+        crit3 = "(3) 각 제대의 상황과 핵심 조치·건의를 빠짐없이 담았는가."
+        sents = _keysent_texts(key_sentences)
+        if sents:
+            listed = "\n".join(f"- {s}" for s in sents)
+            ks_block = f"[핵심 문장]\n{listed}\n\n"
+            crit3 = "(3) 아래 [핵심 문장]들의 내용을 (표현이 달라도) 의미상 빠짐없이 담았는가."
         return (
             "당신은 군사 보고서 요약을 채점하는 심사관이다. 아래 [요약]이 [원문]을 "
             "얼마나 정확히 반영했는지 0~100 정수 하나로만 평가하라.\n"
             "채점 기준: (1) 부대·수치·지명·시간을 정확히 반영했는가, "
             "(2) 원문에 없는 부대·사건·숫자를 지어내지 않았는가, "
-            "(3) 각 제대의 상황과 핵심 조치·건의를 빠짐없이 담았는가.\n"
-            "정확할수록 100, 지어내거나 틀릴수록 0. 숫자만 출력하라.\n\n"
-            f"[원문]\n{source}\n\n[요약]\n{summary}\n\n[점수(0-100)]\n"
+            f"{crit3}\n"
+            "정확할수록 100, 지어내거나 핵심을 빠뜨릴수록 0. 숫자만 출력하라.\n\n"
+            f"[원문]\n{source}\n\n{ks_block}[요약]\n{summary}\n\n[점수(0-100)]\n"
         )
 
-    def score(self, source: str, summary: str) -> float | None:
+    def score(
+        self, source: str, summary: str, key_sentences: object | None = None
+    ) -> float | None:
         key = (source, summary)
         if key in self._cache:
             return self._cache[key]
         try:
-            text = self.backend.generate_text(self._prompt(source, summary), self.max_new_tokens)
+            text = self.backend.generate_text(
+                self._prompt(source, summary, key_sentences), self.max_new_tokens
+            )
         except NotImplementedError:
             self._cache[key] = None
             return None

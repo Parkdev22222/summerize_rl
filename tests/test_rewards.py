@@ -150,7 +150,7 @@ def test_llm_judge_enters_reward_when_enabled():
     class StubJudge:
         def __init__(self, v):
             self.v = v
-        def score(self, source, summary):
+        def score(self, source, summary, key_sentences=None):
             return self.v
 
     cfg = RewardConfig(w_judge=0.5)
@@ -178,6 +178,37 @@ def test_backbone_judge_parses_scores_robustly():
     assert _parse_score("0~100 중 90") == 0.9             # echoed range not hijacked
     assert _parse_score("") is None                       # nothing parseable
     assert _parse_score("의견 없음") is None
+
+
+def test_judge_receives_key_sentences_and_scores_them():
+    from summarize_rl.config import RewardConfig
+    from summarize_rl.judge import BackboneJudge
+    from summarize_rl.llm_backend import MockBackend
+
+    # The extracted key sentences (as (text, weight) pairs) reach the judge
+    # prompt so it can score their semantic reflection.
+    be = MockBackend(vocab_size=16, hidden_size=8, eos_token_id=1)
+    seen = {}
+    be.generate_text = lambda p, m=24: (seen.__setitem__("prompt", p) or "90")
+    ks = [("적 전차 2대를 파괴하였음", 3.0), ("탄약 재보급을 요청함", 2.0)]
+    val = BackboneJudge(be, RewardConfig()).score("원문", "요약", key_sentences=ks)
+    assert val == 0.9
+    assert "[핵심 문장]" in seen["prompt"]
+    assert "적 전차 2대를 파괴하였음" in seen["prompt"]
+    assert "탄약 재보급을 요청함" in seen["prompt"]
+
+    # compute_reward forwards key_sentences to the judge.
+    class RecordJudge:
+        def __init__(self):
+            self.got = None
+        def score(self, source, summary, key_sentences=None):
+            self.got = key_sentences
+            return 0.5
+
+    rec = RecordJudge()
+    compute_reward("s", "src", [], [], RewardConfig(w_judge=0.5),
+                   key_sentences=ks, judge_model=rec)
+    assert rec.got == ks
 
     be = MockBackend(vocab_size=16, hidden_size=8, eos_token_id=1)
     be.generate_text = lambda p, m=24: "이 요약의 점수는 72"

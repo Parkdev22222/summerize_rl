@@ -63,7 +63,7 @@ class RewardConfig:
 
     w_faithfulness: float = 1.0
     w_coverage: float = 2.0  # triplet-entity coverage: the main on-topic anchor
-    w_keysent: float = 1.0  # did the summary reflect the LLM-picked key sentences?
+    w_keysent: float = 0.3  # cheap always-on lexical floor; judge does semantic key-sentence scoring
     w_contrast: float = 0.5  # PMI contrast (source vs. prior); trains weight `a`
     w_length: float = 0.2
     w_copy: float = 1.0  # penalty for verbatim source copying (anti-reward-hacking)
