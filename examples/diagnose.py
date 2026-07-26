@@ -73,7 +73,7 @@ def run_diagnosis(
     # 1) RAW base model: feed the XQ prompt straight to the frozen LLM.
     raw = backend.generate_text(branch_texts["XQ"], cfg.decode.max_new_tokens)
     print("① RAW base 모델 (원문+지시 → LLM 단독, PMI 없음)")
-    print(f"   {raw.strip()[:400]}")
+    print(f"   {raw.strip()}")
     print(f"   [{_reward_line(raw, example, active_terms, cfg, key_sents)}]\n")
 
     # 2) NEUTRAL policy (fresh, untrained).
@@ -81,7 +81,7 @@ def run_diagnosis(
     neu = Summarizer(backend, neutral_policy, cfg, glossary=glossary).summarize(
         example.source, triplets=example.triplets)
     print("② NEUTRAL 정책 (미학습, a=0.5 b=c=d=1/3)")
-    print(f"   {neu.text.strip()[:400]}")
+    print(f"   {neu.text.strip()}")
     print(f"   weights(a,b,c,d)={tuple(round(w,2) for w in neu.mean_weights)}")
     print(f"   [{_reward_line(neu.text, example, active_terms, cfg, key_sents)}]\n")
 
@@ -92,7 +92,7 @@ def run_diagnosis(
         step = s.load_checkpoint(ckpt_path)
         tr = s.summarize(example.source, triplets=example.triplets)
         print(f"③ TRAINED 정책 (ckpt={ckpt_path}, step={step})")
-        print(f"   {tr.text.strip()[:400]}")
+        print(f"   {tr.text.strip()}")
         print(f"   weights(a,b,c,d)={tuple(round(w,2) for w in tr.mean_weights)}")
         print(f"   [{_reward_line(tr.text, example, active_terms, cfg, key_sents)}]\n")
     else:
