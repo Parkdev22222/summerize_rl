@@ -57,6 +57,9 @@ def run_diagnosis(
     active = glossary.gate(example.source) if glossary else []
     active_terms = [a.term for a in active]
     branch_texts = build_branches(example, active).as_dict()
+    # The policy MLP must live on the same device as the backbone's logits/hidden
+    # (HFBackend emits on `device`); otherwise LayerNorm hits a cpu/cuda mismatch.
+    dev = getattr(backend, "device", "cpu")
 
     key_sents = None
     if cfg.reward.w_keysent > 0:
@@ -74,7 +77,7 @@ def run_diagnosis(
     print(f"   [{_reward_line(raw, example, active_terms, cfg, key_sents)}]\n")
 
     # 2) NEUTRAL policy (fresh, untrained).
-    neutral_policy = WeightPolicy(cfg.policy)
+    neutral_policy = WeightPolicy(cfg.policy).to(dev)
     neu = Summarizer(backend, neutral_policy, cfg, glossary=glossary).summarize(
         example.source, triplets=example.triplets)
     print("② NEUTRAL 정책 (미학습, a=0.5 b=c=d=1/3)")
@@ -84,7 +87,7 @@ def run_diagnosis(
 
     # 3) TRAINED policy (loaded checkpoint).
     if ckpt_path:
-        trained_policy = WeightPolicy(cfg.policy)
+        trained_policy = WeightPolicy(cfg.policy).to(dev)
         s = Summarizer(backend, trained_policy, cfg, glossary=glossary)
         step = s.load_checkpoint(ckpt_path)
         tr = s.summarize(example.source, triplets=example.triplets)
