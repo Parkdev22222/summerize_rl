@@ -73,7 +73,20 @@ class BackboneJudge:
         except NotImplementedError:
             self._cache[key] = None
             return None
-        m = _SCORE_RE.search(text or "")
-        val = None if m is None else max(0.0, min(1.0, int(m.group()) / 100.0))
+        val = _parse_score(text)
         self._cache[key] = val
         return val
+
+
+def _parse_score(text: str | None) -> float | None:
+    """Pull a 0-100 score out of the judge's text -> [0,1], or None if absent.
+
+    Takes the LAST 0-100 integer in the output (the score usually follows any
+    preamble or an echoed "0-100"), so a chatty judge that says "…점수는 85"
+    still parses, and an echoed range like "0~100" does not hijack the value.
+    """
+    nums = [int(x) for x in _SCORE_RE.findall(text or "")]
+    nums = [n for n in nums if 0 <= n <= 100]
+    if not nums:
+        return None
+    return max(0.0, min(1.0, nums[-1] / 100.0))

@@ -75,7 +75,7 @@ class RewardConfig:
     # 소총중대). The trainers build a BackboneJudge (local frozen model) when
     # w_judge>0; a custom JudgeModel (e.g. an external API) can be injected too.
     w_judge: float = 0.0
-    judge_max_new_tokens: int = 8  # judge outputs only a 0-100 number
+    judge_max_new_tokens: int = 24  # room for a short preamble before the 0-100 number
     target_length: int = 120  # tokens; overage penalized
     repeat_ngram: int = 3  # n-gram size for repetition penalty
     copy_ngram: int = 4  # n-gram size for the extractive-copy penalty

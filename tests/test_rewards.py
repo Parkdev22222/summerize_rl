@@ -169,6 +169,22 @@ def test_llm_judge_enters_reward_when_enabled():
     assert ignored.judge == 0.0  # w_judge=0 -> judge not even queried
 
 
+def test_backbone_judge_parses_scores_robustly():
+    from summarize_rl.config import RewardConfig
+    from summarize_rl.judge import BackboneJudge, _parse_score
+    from summarize_rl.llm_backend import MockBackend
+
+    assert _parse_score("85") == 0.85
+    assert _parse_score("점수는 85점입니다") == 0.85       # preamble before number
+    assert _parse_score("0~100 중 90") == 0.9             # echoed range not hijacked
+    assert _parse_score("") is None                       # nothing parseable
+    assert _parse_score("의견 없음") is None
+
+    be = MockBackend(vocab_size=16, hidden_size=8, eos_token_id=1)
+    be.generate_text = lambda p, m=24: "이 요약의 점수는 72"
+    assert BackboneJudge(be, RewardConfig()).score("원문", "요약") == 0.72
+
+
 def test_hallucination_lowers_reward_for_invented_units():
     cfg = RewardConfig()
     source = "제1기계화보병대대가 전차 2대를 파괴하였음"

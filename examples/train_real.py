@@ -212,6 +212,12 @@ def main() -> None:
         f"examples={len(examples)} steps={cfg.train.total_steps} "
         f"{roll_label}={rollouts} grad_accum(micro-batch)={args.grad_accum}"
     )
+    print(
+        f"reward: balance_content={cfg.reward.balance_content} "
+        f"w_judge={cfg.reward.w_judge} "
+        f"chat_template={getattr(backend, 'use_chat_template', False)} "
+        f"(judge {'ON' if cfg.reward.w_judge > 0 else 'off'})"
+    )
     # GRPO adds kl / clip columns; the rest of the row is shared.
     extra_hdr = f" {'kl':>6} {'clip':>5}" if is_grpo else ""
     print(f"{'step':>5} {'loss':>8} {'reward':>7} {'faith':>6} {'cov':>5} "
