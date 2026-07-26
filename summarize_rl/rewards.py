@@ -90,7 +90,6 @@ class LexicalFaithfulness:
 class RewardBreakdown:
     faithfulness: float
     coverage: float
-    term_usage: float
     key_sentence: float
     contrast: float
     length_penalty: float
@@ -277,7 +276,6 @@ def compute_reward(
     fm = faithfulness_model or LexicalFaithfulness()
     faith = float(fm.score(summary, source))
     cov = triplet_coverage(summary, triplets)
-    term = term_usage(summary, active_terms, source=source)
     n_tokens = summary_length if summary_length is not None else len(tokenize(summary))
     lpen = length_penalty(n_tokens, config, summary)
     copy = extractive_copy(summary, source, n=config.copy_ngram)
@@ -293,13 +291,12 @@ def compute_reward(
 
     fluency = (
         config.w_faithfulness * faith
-        + config.w_term * term
         + config.w_contrast * contrast
     )
     if config.balance_content:
         # Gate the fluency-style terms by how much *this source's* content the
         # summary actually captured. A summary that is grammatical and military
-        # in tone but off-topic scores cov~0 (and keysent~0), so its faith/term/
+        # in tone but off-topic scores cov~0 (and keysent~0), so its faith/
         # contrast are throttled to `gate_floor` and can no longer dominate. The
         # content anchors (cov, keysent) stay additive so they always pull toward
         # the source. This directly counters the "reward-component imbalance"
@@ -324,7 +321,6 @@ def compute_reward(
     return RewardBreakdown(
         faithfulness=faith,
         coverage=cov,
-        term_usage=term,
         key_sentence=keysent,
         contrast=contrast,
         length_penalty=lpen,

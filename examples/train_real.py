@@ -220,8 +220,8 @@ def main() -> None:
     )
     # GRPO adds kl / clip columns; the rest of the row is shared.
     extra_hdr = f" {'kl':>6} {'clip':>5}" if is_grpo else ""
-    print(f"{'step':>5} {'loss':>8} {'reward':>7} {'faith':>6} {'cov':>5} "
-          f"{'term':>5}{extra_hdr} {'a':>5} {'b':>5} {'c':>5} {'d':>5} "
+    print(f"{'step':>5} {'loss':>8} {'reward':>7} {'faith':>6} {'cov':>5}"
+          f"{extra_hdr} {'a':>5} {'b':>5} {'c':>5} {'d':>5} "
           f"{'gnorm':>6} {'lr':>9}")
 
     ga = max(1, args.grad_accum)
@@ -238,7 +238,7 @@ def main() -> None:
         if step % args.log_every == 0:
             extra = f" {m.kl:>6.3f} {m.clip_frac:>5.2f}" if is_grpo else ""
             print(f"{m.step:>5} {m.loss:>8.3f} {m.mean_reward:>7.3f} "
-                  f"{m.faithfulness:>6.3f} {m.coverage:>5.3f} {m.term_usage:>5.3f}{extra} "
+                  f"{m.faithfulness:>6.3f} {m.coverage:>5.3f}{extra} "
                   f"{m.weight_a:>5.2f} {m.weight_b:>5.2f} {m.weight_c:>5.2f} "
                   f"{m.weight_d:>5.2f} {m.grad_norm:>6.2f} {m.lr:>9.2e}")
 

@@ -84,7 +84,7 @@ def test_length_penalty_repetition():
 
 def test_compute_reward_weighted_sum():
     cfg = RewardConfig(
-        w_faithfulness=1.0, w_coverage=1.0, w_term=0.5, w_length=0.2, target_length=100
+        w_faithfulness=1.0, w_coverage=1.0, w_length=0.2, target_length=100
     )
     triplets = [Triplet("적", "행동", "이동")]
     r = compute_reward(
@@ -94,11 +94,10 @@ def test_compute_reward_weighted_sum():
         active_terms=["기동"],
         config=cfg,
     )
-    # faithfulness=1, coverage=1 (적, 이동 present), term=0 (기동 absent)
+    # faithfulness=1, coverage=1 (적, 이동 present)
     assert math.isclose(r.faithfulness, 1.0, rel_tol=1e-6)
     assert math.isclose(r.coverage, 1.0, rel_tol=1e-6)
-    assert math.isclose(r.term_usage, 0.0, abs_tol=1e-9)
-    expected = 1.0 * 1.0 + 1.0 * 1.0 + 0.5 * 0.0 - 0.2 * r.length_penalty
+    expected = 1.0 * 1.0 + 1.0 * 1.0 - 0.2 * r.length_penalty
     assert math.isclose(r.total, expected, rel_tol=1e-6)
 
 
@@ -122,7 +121,7 @@ def test_term_usage_only_credits_non_source_terms():
 
 
 def test_copy_penalty_lowers_reward_for_verbatim():
-    cfg = RewardConfig(w_copy=1.0, w_faithfulness=1.0, w_coverage=0.0, w_term=0.0)
+    cfg = RewardConfig(w_copy=1.0, w_faithfulness=1.0, w_coverage=0.0)
     src = "적 부대가 능선을 따라 이동하였고 이후 고지를 장악하였다"
     verbatim = compute_reward(src, src, [], [], cfg)  # summary == source
     novel = compute_reward("부대가 고지를 장악", src, [], [], cfg)
@@ -217,15 +216,15 @@ def test_reward_prefers_on_topic_over_generic():
 
 
 def test_balance_content_gate_throttles_off_topic_fluency():
-    # A fluent, on-genre but off-topic summary can still score high on the
-    # gameable fluency terms (faith/term). With balance_content on, those terms
-    # are gated by content (cov+keysent), so the off-topic summary loses most of
-    # its fluency credit and the on-topic/off-topic total gap widens.
+    # A summary that reuses source words (high faithfulness) but does not cover
+    # the source's entities can still farm the fluency term. With balance_content
+    # on, faithfulness is gated by content (cov+keysent), so this high-faith /
+    # zero-coverage summary loses most of its fluency credit.
     triplets = [Triplet("갈도비아", "목표", "국경통제"), Triplet("블루포스", "규모", "대대")]
     source = "갈도비아 블루포스 대대가 국경통제 작전을 수행하며 정찰한다."
     on_topic = "갈도비아 블루포스 대대가 국경통제 작전을 수행한다"
-    off_topic = "아군 부대가 고지를 점령하고 방어 진지를 구축하며 기동한다"
-    terms = ["기동", "정찰"]
+    off_topic = "작전을 수행하며 정찰한다"  # words from source, but covers no entity
+    terms = []
 
     plain = RewardConfig()
     gated = RewardConfig(balance_content=True)
@@ -238,8 +237,7 @@ def test_balance_content_gate_throttles_off_topic_fluency():
     # Gating never hurts the ranking and strictly widens the separation.
     assert gap_gated > gap_plain
 
-    # The off-topic summary's fluency credit is throttled toward the floor: its
-    # faith/term contribution is scaled by the (near-zero) content gate.
+    # The off-topic summary's faithfulness credit is throttled toward the floor.
     off_gated = compute_reward(off_topic, source, triplets, terms, gated)
     off_plain = compute_reward(off_topic, source, triplets, terms, plain)
     assert off_gated.total < off_plain.total
@@ -255,7 +253,6 @@ def test_balance_content_off_by_default_is_unchanged():
     expected = (
         cfg.w_faithfulness * bd.faithfulness
         + cfg.w_coverage * bd.coverage
-        + cfg.w_term * bd.term_usage
         + cfg.w_keysent * bd.key_sentence
         + cfg.w_contrast * bd.contrast
         - cfg.w_length * bd.length_penalty
@@ -343,7 +340,7 @@ def test_key_sentence_enters_total():
 
 def test_contrast_term_enters_total():
     cfg = RewardConfig(
-        w_faithfulness=1.0, w_coverage=1.0, w_term=0.5, w_contrast=0.5, w_length=0.2
+        w_faithfulness=1.0, w_coverage=1.0, w_contrast=0.5, w_length=0.2
     )
     triplets = [Triplet("적", "행동", "이동")]
     kwargs = dict(

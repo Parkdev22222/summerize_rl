@@ -46,7 +46,7 @@ def _reward_line(summary, example, active_terms, cfg, key_sents):
         contrast=0.0,
     )
     return (f"faith={bd.faithfulness:.2f} cov={bd.coverage:.2f} "
-            f"term={bd.term_usage:.2f} keysent={bd.key_sentence:.2f} "
+            f"keysent={bd.key_sentence:.2f} hallu={bd.hallucination:.2f} "
             f"copy={bd.copy_penalty:.2f} total={bd.total:.3f}")
 
 

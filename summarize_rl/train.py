@@ -79,7 +79,6 @@ class StepMetrics:
     mean_reward: float
     faithfulness: float
     coverage: float
-    term_usage: float
     key_sentence: float
     contrast: float
     length_penalty: float
@@ -247,7 +246,6 @@ class SCSTTrainer:
             "mean_reward": sum(raw_rewards) / k,
             "faithfulness": sum(bd.faithfulness for bd in breakdowns) / k,
             "coverage": sum(bd.coverage for bd in breakdowns) / k,
-            "term_usage": sum(bd.term_usage for bd in breakdowns) / k,
             "key_sentence": sum(bd.key_sentence for bd in breakdowns) / k,
             "hallucination": sum(bd.hallucination for bd in breakdowns) / k,
             "judge": sum(bd.judge for bd in breakdowns) / k,
@@ -292,7 +290,7 @@ class SCSTTrainer:
             grad_norm=float(grad_norm),
             lr=float(self.scheduler.get_last_lr()[0]),
             **{k: agg[k] for k in (
-                "mean_reward", "faithfulness", "coverage", "term_usage",
+                "mean_reward", "faithfulness", "coverage",
                 "key_sentence", "contrast", "length_penalty", "copy_penalty",
                 "hallucination", "judge", "mean_len", "weight_a", "weight_b",
                 "weight_c", "weight_d", "entropy",
