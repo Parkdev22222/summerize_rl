@@ -27,6 +27,14 @@ class PolicyConfig:
     # loads under both settings (but must match training to reproduce results).
     learn_a: bool = True
     fixed_a: float = 0.5  # used when learn_a is False; must be in (0, 1)
+    # Upper bound on the learned `a` (prior-removal strength). With a byte-level
+    # BPE tokenizer, aggressive prior removal (a -> 1) over-tilts the next-token
+    # distribution and can select invalid UTF-8 byte continuations, producing `�`
+    # replacement chars in the output. Capping a to (0, a_max) via a scaled
+    # sigmoid keeps contrastive decoding from distorting the byte distribution
+    # that far. Default 1.0 = no cap (unchanged behavior); set < 1 (e.g. 0.5) to
+    # bound it. Applies only when learn_a is True.
+    a_max: float = 1.0
 
     @property
     def num_branches(self) -> int:

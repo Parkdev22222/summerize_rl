@@ -4,7 +4,7 @@ The ONLY trainable component. Given per-branch hidden states at decoding step t,
 it emits the four PMI combination weights [a, b, c, d] with the plan's
 constraints:
 
-    a in (0, 1)          -- prior-removal strength     (sigmoid)
+    a in (0, a_max)      -- prior-removal strength     (scaled sigmoid; a_max<=1)
     b + c + d = 1        -- source/core/term balance    (softmax)
 
 Kept in fp32 for numerical stability even when the LLM runs in bf16.
@@ -100,7 +100,11 @@ class WeightPolicy(nn.Module):
         features = features.float()
         raw = self.head(self.net(self.norm(features)))  # [batch, 4]
         if self.config.learn_a:
-            a = torch.sigmoid(raw[..., 0])  # (0, 1)
+            # Scaled sigmoid: a in (0, a_max). a_max < 1 caps prior removal so
+            # contrastive decoding cannot tilt the byte-BPE distribution far
+            # enough to emit invalid UTF-8 continuations (`�`). a_max=1 is the
+            # plain sigmoid (0, 1) -- unchanged behavior.
+            a = self.config.a_max * torch.sigmoid(raw[..., 0])
         else:
             a = torch.full_like(raw[..., 0], self.config.fixed_a)  # constant, no grad
         bcd = torch.softmax(raw[..., 1:], dim=-1)  # sums to 1

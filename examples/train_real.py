@@ -128,6 +128,11 @@ def main() -> None:
     p.add_argument("--keysent-max-new-tokens", type=int, default=None,
                    help="generation budget for key-sentence extraction; raise it when --keysent-n "
                         "is large (default 256, ~enough for 3 sentences).")
+    p.add_argument("--a-max", type=float, default=None,
+                   help="cap on the learned prior-removal strength `a` (PolicyConfig.a_max; "
+                        "default 1.0 = no cap). Set < 1 (e.g. 0.5) to bound `a` so aggressive "
+                        "contrastive decoding cannot tilt the byte-BPE distribution into invalid "
+                        "UTF-8 (`�`). Recommended for byte-level tokenizers like EXAONE.")
     p.add_argument("--query", default=None, help="override the instruction/query")
     p.add_argument("--limit", type=int, default=None, help="use only the first N examples (smoke)")
     p.add_argument("--seed", type=int, default=42)
@@ -185,6 +190,8 @@ def main() -> None:
         cfg.reward.keysent_n = args.keysent_n
     if args.keysent_max_new_tokens is not None:
         cfg.reward.keysent_max_new_tokens = args.keysent_max_new_tokens
+    if args.a_max is not None:
+        cfg.policy.a_max = args.a_max
 
     # --- policy on the SAME device as the backbone (stays fp32) ----------
     # HFBackend emits logits/hidden on `device`; the policy MLP must match, and

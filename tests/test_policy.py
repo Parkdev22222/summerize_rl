@@ -128,6 +128,32 @@ def test_learn_a_true_varies_and_has_gradient():
     assert policy.head.weight.grad[0].abs().sum() > 0  # a-column gets gradient
 
 
+def test_a_max_caps_learned_a():
+    # a_max < 1 bounds the learned `a` to (0, a_max); neutral init -> a_max/2.
+    cfg = PolicyConfig(llm_hidden_size=8, hidden_dim=16, a_max=0.5, init_std=0.1)
+    policy = WeightPolicy(cfg)
+    feats = _hidden(16, 8).as_features(cfg.use_contrast_features)
+    w = policy(feats)
+    assert torch.all(w.a > 0) and torch.all(w.a < 0.5)
+    assert w.a.requires_grad
+    # Zero-bias, zero-weight head -> a = a_max * sigmoid(0) = a_max/2.
+    cfg0 = PolicyConfig(llm_hidden_size=8, hidden_dim=16, a_max=0.5, init_std=0.0)
+    p0 = WeightPolicy(cfg0)
+    p0.eval()
+    w0 = p0(torch.zeros(2, cfg0.input_dim))
+    assert torch.allclose(w0.a, torch.full_like(w0.a, 0.25), atol=1e-4)
+
+
+def test_a_max_default_is_uncapped():
+    # Default a_max=1.0 == plain sigmoid: neutral init gives a=0.5 (unchanged).
+    cfg = PolicyConfig(llm_hidden_size=8, hidden_dim=16, init_std=0.0)
+    assert cfg.a_max == 1.0
+    policy = WeightPolicy(cfg)
+    policy.eval()
+    w = policy(torch.zeros(2, cfg.input_dim))
+    assert torch.allclose(w.a, torch.full_like(w.a, 0.5), atol=1e-4)
+
+
 def test_entropy_bounds():
     cfg = PolicyConfig(llm_hidden_size=8, hidden_dim=16)
     policy = WeightPolicy(cfg)
