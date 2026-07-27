@@ -204,6 +204,7 @@ def build_hf_summarizer(
     max_seq_len: int = 2048,
     max_new_tokens: int | None = None,
     min_new_tokens: int | None = None,
+    plausibility_alpha: float | None = None,
     trust_remote_code: bool = False,
     use_chat_template: bool = True,
     extract_triplets: bool = True,
@@ -237,6 +238,8 @@ def build_hf_summarizer(
         cfg.decode.max_new_tokens = max_new_tokens
     if min_new_tokens is not None:
         cfg.decode.min_new_tokens = min_new_tokens
+    if plausibility_alpha is not None:
+        cfg.decode.plausibility_alpha = plausibility_alpha
 
     dev = torch.device(device)
     policy = WeightPolicy(cfg.policy).to(dev)

@@ -8,6 +8,7 @@ from summarize_rl.decoder import (
     pmi_contrast,
     score_tokens,
     score_tokens_batch,
+    _plausibility_mask,
     _top_p_mask,
 )
 from summarize_rl.llm_backend import MockBackend, StepOutput
@@ -121,6 +122,74 @@ def test_combine_gradient_flows_to_weights():
     out = combine_logits(step, Weights(a, b, c, d))
     out.sum().backward()
     assert a.grad is not None and b.grad is not None
+
+
+def test_plausibility_mask_prunes_implausible_tokens():
+    # XQ (base, branch 0) concentrates on tokens 0,1; tokens 2,3 ~0 probability.
+    # With alpha=0.1 the base-implausible tokens 2,3 are masked to -inf.
+    branch = torch.tensor([
+        [5.0, 4.0, -10.0, -10.0],  # XQ base
+        [0.0, 0.0, 0.0, 0.0],      # SQ
+        [0.0, 0.0, 0.0, 0.0],      # GQ
+        [0.0, 0.0, 0.0, 0.0],      # Q
+    ])
+    combined = torch.zeros(4)
+    out = _plausibility_mask(combined, branch, alpha=0.1)
+    assert torch.isfinite(out[0]) and torch.isfinite(out[1])
+    assert out[2] == float("-inf") and out[3] == float("-inf")
+
+
+def test_plausibility_mask_noop_when_disabled():
+    branch = torch.randn(4, 6)
+    combined = torch.randn(6)
+    out = _plausibility_mask(combined, branch, alpha=0.0)
+    assert torch.equal(out, combined)  # exactly unchanged (same object semantics)
+
+
+def test_plausibility_mask_never_empty():
+    # The base's own top token always survives (log alpha < 0), even at tiny alpha.
+    branch = torch.randn(4, 20)
+    combined = torch.zeros(20)
+    out = _plausibility_mask(combined, branch, alpha=1e-6)
+    top = int(torch.argmax(branch[0]).item())
+    assert torch.isfinite(out[top])
+    assert bool(torch.isfinite(out).any())
+
+
+def test_plausibility_mask_batched_shape():
+    branch = torch.randn(3, 4, 7)  # [N,4,V]
+    combined = torch.zeros(3, 7)
+    out = _plausibility_mask(combined, branch, alpha=0.2)
+    assert out.shape == (3, 7)
+    # every row keeps at least its base top token
+    for r in range(3):
+        top = int(torch.argmax(branch[r, 0]).item())
+        assert torch.isfinite(out[r, top])
+
+
+def test_generate_with_plausibility_batch_matches_single():
+    # With the constraint on, batched greedy still equals single greedy
+    # (MockBackend is history-independent; both apply the identical XQ mask).
+    backend, bt, policy, _cfg = _batch_setup()
+    cfg = DecodeConfig(max_new_tokens=10, min_new_tokens=3, eos_token_id=1,
+                       plausibility_alpha=0.1)
+    single = generate(backend, bt, policy, cfg, greedy=True)
+    batch = generate_batch(backend, bt, policy, cfg, n=3, greedy=True)
+    for r in batch:
+        assert r.token_ids == single.token_ids
+
+
+def test_score_tokens_batch_plausibility_matches_single():
+    backend, bt, policy, _cfg = _batch_setup()
+    cfg = DecodeConfig(max_new_tokens=10, min_new_tokens=3, eos_token_id=1,
+                       plausibility_alpha=0.1)
+    seqs = [[2, 3, 4, 5], [6, 7, 8]]
+    batched = score_tokens_batch(backend, bt, policy, seqs, cfg)
+    for r, ids in enumerate(seqs):
+        single = score_tokens(backend, bt, policy, ids, cfg)
+        lp_single = torch.stack(single.logps)
+        lp_batch = torch.stack(batched[r].logps)
+        assert torch.allclose(lp_single, lp_batch, atol=1e-5)
 
 
 def test_top_p_mask_keeps_top_token():

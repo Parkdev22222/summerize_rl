@@ -152,6 +152,10 @@ def main() -> None:
     p.add_argument("--query", default=DEFAULT_QUERY, help="default summarization instruction")
     p.add_argument("--max-new-tokens", type=int, default=None)
     p.add_argument("--min-new-tokens", type=int, default=None)
+    p.add_argument("--plausibility-alpha", type=float, default=None,
+                   help="adaptive plausibility constraint (contrastive decoding): drop tokens the "
+                        "base (XQ) model gives prob < alpha*max, killing `�` byte corruption from "
+                        "aggressive prior removal. 0/omit=off; try 0.1. No retraining needed.")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     args = p.parse_args()
@@ -169,6 +173,7 @@ def main() -> None:
             max_seq_len=args.max_seq_len,
             max_new_tokens=args.max_new_tokens,
             min_new_tokens=args.min_new_tokens,
+            plausibility_alpha=args.plausibility_alpha,
             trust_remote_code=args.trust_remote_code,
             use_chat_template=args.use_chat_template,
             extract_triplets=args.extract_triplets,

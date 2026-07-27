@@ -115,6 +115,9 @@ def main() -> None:
                    help="allow custom modeling code from the HF repo (needed for EXAONE etc.)")
     p.add_argument("--no-chat-template", dest="use_chat_template", action="store_false", default=True,
                    help="do NOT wrap prompts in the model's chat template (on by default).")
+    p.add_argument("--plausibility-alpha", type=float, default=None,
+                   help="adaptive plausibility constraint (drop tokens the base XQ model gives "
+                        "prob < alpha*max); kills `�` byte corruption. 0/omit=off, try 0.1.")
     args = p.parse_args()
 
     torch.manual_seed(0)
@@ -125,6 +128,8 @@ def main() -> None:
     cfg.policy.llm_hidden_size = backend.hidden_size
     cfg.decode.eos_token_id = backend.eos_token_id
     cfg.decode.pad_token_id = backend.pad_token_id
+    if args.plausibility_alpha is not None:
+        cfg.decode.plausibility_alpha = args.plausibility_alpha
 
     with open(args.data, encoding="utf-8") as fh:
         rec = json.loads(list(fh)[args.index])

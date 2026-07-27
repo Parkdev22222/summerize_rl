@@ -133,6 +133,11 @@ def main() -> None:
                         "default 1.0 = no cap). Set < 1 (e.g. 0.5) to bound `a` so aggressive "
                         "contrastive decoding cannot tilt the byte-BPE distribution into invalid "
                         "UTF-8 (`�`). Recommended for byte-level tokenizers like EXAONE.")
+    p.add_argument("--plausibility-alpha", type=float, default=None,
+                   help="adaptive plausibility constraint (DecodeConfig.plausibility_alpha; "
+                        "default 0=off). Drops tokens the base (XQ) model gives prob < alpha*max "
+                        "before sampling -- hard-blocks the invalid byte continuations that cause "
+                        "`�`. Applied in sampling and GRPO re-scoring alike. Try 0.1.")
     p.add_argument("--query", default=None, help="override the instruction/query")
     p.add_argument("--limit", type=int, default=None, help="use only the first N examples (smoke)")
     p.add_argument("--seed", type=int, default=42)
@@ -192,6 +197,8 @@ def main() -> None:
         cfg.reward.keysent_max_new_tokens = args.keysent_max_new_tokens
     if args.a_max is not None:
         cfg.policy.a_max = args.a_max
+    if args.plausibility_alpha is not None:
+        cfg.decode.plausibility_alpha = args.plausibility_alpha
 
     # --- policy on the SAME device as the backbone (stays fp32) ----------
     # HFBackend emits logits/hidden on `device`; the policy MLP must match, and

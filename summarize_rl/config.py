@@ -63,6 +63,17 @@ class DecodeConfig:
     min_new_tokens: int = 20
     eos_token_id: int | None = None
     pad_token_id: int | None = None
+    # Adaptive plausibility constraint (Contrastive Decoding, Li et al. 2022).
+    # Before sampling from the PMI-combined logits, drop every token the base
+    # (XQ = source+query) distribution deems implausible -- prob < alpha * (max
+    # base prob). The base is on-source and always UTF-8-valid, so this prunes
+    # exactly the invalid byte continuations that aggressive prior removal (large
+    # `a`) would otherwise let through as `�`, while leaving fluent on-source
+    # tokens alone. Applied identically in sampling and GRPO re-scoring so
+    # importance ratios stay well defined. 0 = disabled (unchanged behavior);
+    # a typical enabled value is 0.1. Works at train AND inference time (no
+    # retraining needed to protect a loaded checkpoint).
+    plausibility_alpha: float = 0.0
 
 
 @dataclass

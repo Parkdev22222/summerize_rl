@@ -11,6 +11,7 @@ constants (detached); gradients flow only  logp -> combined logit -> (a,b,c,d)
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import torch
@@ -72,6 +73,32 @@ def combine_logits(step: StepOutput, weights: Weights) -> torch.Tensor:
     a, b, c, d = weights.a, weights.b, weights.c, weights.d  # each [1]
     positive = b * xq + c * sq + d * gq
     return (1 + a) * positive - a * q  # [V]
+
+
+def _plausibility_mask(
+    combined: torch.Tensor, branch_logits: torch.Tensor, alpha: float
+) -> torch.Tensor:
+    """Adaptive plausibility constraint (Contrastive Decoding, Li et al. 2022).
+
+    Mask (to -inf) any token the *base* distribution deems implausible: keep only
+    tokens whose base probability >= ``alpha`` * (max base probability). The base
+    is the XQ branch (source+query fed to the frozen LLM) -- on-source and always
+    UTF-8-valid -- so this prunes exactly the invalid byte continuations that
+    aggressive prior removal (large ``a``) would otherwise let through as ``�``,
+    while leaving fluent on-source tokens untouched. The base's own top token
+    always survives (log alpha < 0), so the plausible set is never empty. No-op
+    when ``alpha <= 0``.
+
+    combined: ``[V]`` or ``[N, V]``. branch_logits: ``[4, V]`` or ``[N, 4, V]``
+    (XQ = branch index 0). Returns the masked combined logits.
+    """
+    if alpha <= 0:
+        return combined
+    base = branch_logits.detach()
+    base_xq = base[:, 0] if base.dim() == 3 else base[0]  # [N,V] or [V]
+    logp = F.log_softmax(base_xq, dim=-1)
+    thresh = logp.amax(dim=-1, keepdim=True) + math.log(alpha)
+    return combined.masked_fill(logp < thresh, float("-inf"))
 
 
 def pmi_contrast(step: StepOutput, token: int) -> float:
@@ -139,6 +166,7 @@ def generate(
     for t in range(config.max_new_tokens):
         weights = policy(_branch_hidden(step).as_features(use_contrast))
         combined = combine_logits(step, weights)  # [V]
+        combined = _plausibility_mask(combined, step.logits, config.plausibility_alpha)
 
         # Enforce min_new_tokens by masking EOS until the floor is reached.
         if eos is not None and t < config.min_new_tokens:
@@ -213,6 +241,7 @@ def score_tokens(
     for t, token in enumerate(token_ids):
         weights = policy(_branch_hidden(step).as_features(use_contrast))
         combined = combine_logits(step, weights)
+        combined = _plausibility_mask(combined, step.logits, config.plausibility_alpha)
         if eos is not None and t < config.min_new_tokens:
             combined = combined.clone()
             combined[eos] = float("-inf")
@@ -294,6 +323,7 @@ def generate_batch(
     for t in range(config.max_new_tokens):
         weights = policy(_branch_features_batch(step, use_contrast))  # each [N]
         combined = combine_logits_batch(step, weights)  # [N,V]
+        combined = _plausibility_mask(combined, step.logits, config.plausibility_alpha)
         if eos is not None and t < config.min_new_tokens:
             combined = combined.clone()
             combined[:, eos] = float("-inf")
@@ -371,6 +401,7 @@ def score_tokens_batch(
     for t in range(total):
         weights = policy(_branch_features_batch(step, use_contrast))
         combined = combine_logits_batch(step, weights)
+        combined = _plausibility_mask(combined, step.logits, config.plausibility_alpha)
         if eos is not None and t < config.min_new_tokens:
             combined = combined.clone()
             combined[:, eos] = float("-inf")
