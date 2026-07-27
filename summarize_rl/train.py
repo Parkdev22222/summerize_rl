@@ -104,6 +104,7 @@ class SCSTTrainer:
         *,
         glossary: Glossary | None = None,
         faithfulness_model: FaithfulnessModel | None = None,
+        judge_model: object | None = None,
         generator: torch.Generator | None = None,
     ):
         self.policy = policy
@@ -115,7 +116,9 @@ class SCSTTrainer:
         self.key_extractor = (
             KeySentenceExtractor(config.reward) if config.reward.w_keysent > 0 else None
         )
-        self.judge = (
+        # An injected judge (e.g. GeminiJudge) wins; else build the local
+        # BackboneJudge when the judge reward is enabled.
+        self.judge = judge_model if judge_model is not None else (
             BackboneJudge(backend, config.reward) if config.reward.w_judge > 0 else None
         )
         # RAW (frozen-LLM) reference summary per source, for the comparative

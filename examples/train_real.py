@@ -126,6 +126,15 @@ def main() -> None:
                    help="pairwise judge vs the RAW frozen-LLM summary ('beat RAW?') instead of the "
                         "absolute 0-100 score. Discriminative per-rollout signal that directly "
                         "optimizes beating the base model (needs --w-judge > 0).")
+    p.add_argument("--judge-backend", choices=["backbone", "gemini"], default="backbone",
+                   help="who judges: 'backbone' (local frozen model, free, self-referential) or "
+                        "'gemini' (external API, stronger + independent of the generator). gemini "
+                        "needs GEMINI_API_KEY and calls the API once per rollout (SLOW / costs money "
+                        "/ rate-limited).")
+    p.add_argument("--gemini-model", default="gemini-2.5-flash",
+                   help="[judge-backend gemini] Gemini model id (use a fast one).")
+    p.add_argument("--judge-sleep", type=float, default=0.0,
+                   help="[judge-backend gemini] seconds to sleep after each Gemini call (rate limit).")
     p.add_argument("--keysent-n", type=int, default=None,
                    help="how many source key sentences the LLM extracts for the key-sentence "
                         "reward (RewardConfig.keysent_n; default 3). Set 0 to disable the term.")
@@ -215,11 +224,20 @@ def main() -> None:
     glossary = load_glossary(args.glossary)
     examples = load_corpus(args.data, args.query, args.limit)
 
+    # Optional external Gemini judge (else the trainer builds the local backbone
+    # judge when w_judge>0). Built once and shared across steps (caches verdicts).
+    judge_model = None
+    if cfg.reward.w_judge > 0 and args.judge_backend == "gemini":
+        from summarize_rl.judge import GeminiJudge
+        judge_model = GeminiJudge(model_name=args.gemini_model, sleep=args.judge_sleep)
+
     is_grpo = args.rl == "grpo"
     if is_grpo:
-        trainer = GRPOTrainer(policy, backend, cfg, glossary=glossary, generator=gen)
+        trainer = GRPOTrainer(policy, backend, cfg, glossary=glossary,
+                              judge_model=judge_model, generator=gen)
     else:
-        trainer = SCSTTrainer(policy, backend, cfg, glossary=glossary, generator=gen)
+        trainer = SCSTTrainer(policy, backend, cfg, glossary=glossary,
+                              judge_model=judge_model, generator=gen)
     logger = make_logger(args.logdir)
 
     os.makedirs(args.ckpt_dir, exist_ok=True)
@@ -232,7 +250,7 @@ def main() -> None:
         f"{roll_label}={rollouts} grad_accum(micro-batch)={args.grad_accum}"
     )
     judge_mode = (
-        ("비교형(vs RAW)" if cfg.reward.judge_comparative else "절대채점")
+        (f"{args.judge_backend}/" + ("비교형(vs RAW)" if cfg.reward.judge_comparative else "절대채점"))
         if cfg.reward.w_judge > 0 else "off"
     )
     print(

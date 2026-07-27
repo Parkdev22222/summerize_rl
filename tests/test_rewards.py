@@ -268,6 +268,29 @@ def test_comparative_judge_enters_reward_when_configured():
     assert 0.0 <= bd2.judge <= 1.0
 
 
+def test_gemini_judge_with_injected_call():
+    # GeminiJudge takes an injected call(prompt)->str so it is testable without
+    # the google SDK or network. It shares the prompts/parsers with BackboneJudge.
+    from summarize_rl.judge import GeminiJudge
+
+    def prefer_non_reference(prompt):
+        a_body = prompt.split("[요약 A]\n", 1)[1].split("\n", 1)[0].strip()
+        return "A" if a_body != "기준요약" else "B"
+
+    j = GeminiJudge(call=prefer_non_reference)
+    assert j.compare("원문", "후보요약", "기준요약") == 1.0   # candidate always wins
+    assert j.compare("원문", "다른후보", "기준요약") == 1.0   # regardless of order parity
+
+    js = GeminiJudge(call=lambda p: "점수는 90")
+    assert js.score("원문", "요약") == 0.9
+
+    # drop-in for the reward: comparative mode uses compare() via the reference.
+    cfg = RewardConfig(w_judge=1.0, judge_comparative=True)
+    bd = compute_reward("적 부대 이동", source="적 부대 이동", triplets=[], active_terms=[],
+                        config=cfg, judge_model=j, reference_summary="기준요약")
+    assert bd.judge in (0.0, 0.5, 1.0)
+
+
 def test_hallucination_lowers_reward_for_invented_units():
     cfg = RewardConfig()
     source = "제1기계화보병대대가 전차 2대를 파괴하였음"
