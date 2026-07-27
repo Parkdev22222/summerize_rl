@@ -19,8 +19,61 @@ logit_c = (1 + a) · (b·logit_XQ + c·logit_SQ + d·logit_GQ) − a·logit_Q
 
 - `XQ` 원문+질의 · `SQ` triplet+질의 · `GQ` 게이팅 용어사전+질의 · `Q` 질의(prior)
 - **LLM은 frozen** — 로짓/hidden만 제공. 그래디언트는 정책망 θ에만 흐른다.
+- **prior 제거 강도 `a`는 기본적으로 토큰별 학습**(`PolicyConfig(learn_a=True)`)한다.
+  contrast 보상이 `tanh`로 bound되고 엔트로피 보너스가 `a`까지 정규화해 경계 붕괴를 막기
+  때문. `learn_a=False`로 두면 `fixed_a`(기본 0.5)에 고정하고 `b,c,d`(원문/triplet/용어 혼합)만
+  학습한다. head는 항상 4폭이라 체크포인트는 양쪽에서 로드되지만, 학습·추론 config가 일치해야
+  결과가 재현된다. `a`를 고정하면 보상의 `w_contrast` 항은 더 이상 `a`를 학습시키지 못하고
+  `b,c,d`만 형성한다(`w_contrast=0`으로 뺄 수 있음).
 
 ## 설치
+
+### uv (권장)
+
+```bash
+uv sync                      # 가상환경(.venv) 생성 + 핵심 deps(torch) + dev(pytest,numpy)
+uv sync --extra hf           # 실제 백본(HFBackend, transformers) 사용 시 추가
+uv sync --extra tb           # TensorBoard 로깅 사용 시 추가
+```
+
+이후 모든 명령은 `uv run` 앞에 붙여 실행한다 (venv 자동 활성화):
+
+```bash
+uv run python -m examples.run_demo --steps 20        # SCST 데모
+uv run python -m examples.run_grpo_demo --steps 20   # GRPO 데모
+uv run pytest
+```
+
+### TensorBoard로 실험 결과 보기
+
+학습 스크립트(`run_demo`, `run_grpo_demo`, `train_real`)는 매 스텝의 지표를
+`--logdir`(기본 `runs/<name>`)에 기록한다. `reward/*`, `weights/*`, `loss/*`,
+`grpo/*`(kl·clip) 등 태그 네임스페이스로 정리된다.
+
+```bash
+uv run --extra tb python -m examples.run_grpo_demo --steps 200 --logdir runs/grpo
+uv run --extra tb tensorboard --logdir runs        # 브라우저에서 확인
+```
+
+`--logdir ''`(또는 `none`)로 로깅을 끌 수 있다. SCST와 GRPO를 같은 `runs/`
+아래 다른 하위 폴더로 기록하면 대시보드에서 곡선을 겹쳐 비교할 수 있다.
+
+의존성은 `pyproject.toml`에 선언되어 있고 `uv.lock`으로 고정된다.
+
+### TensorBoard로 실험 결과 보기
+
+학습 스크립트(`run_demo`, `train_real`)는 매 스텝의 지표를 `--logdir`(기본
+`runs/<name>`)에 기록한다. `reward/*`, `weights/*`, `loss/*`, `optim/*`,
+`policy/*` 등 태그 네임스페이스로 정리된다.
+
+```bash
+uv run --extra tb python -m examples.run_demo --steps 200 --logdir runs/scst
+uv run --extra tb tensorboard --logdir runs        # 브라우저에서 확인
+```
+
+`--logdir ''`(또는 `none`)로 로깅을 끌 수 있다.
+
+### pip (대안)
 
 ```bash
 pip install torch            # 핵심 라이브러리 + MockBackend + 테스트
@@ -75,6 +128,128 @@ for step in range(cfg.train.total_steps):
 
 보상의 `Faithfulness`는 기본적으로 lexical fallback을 쓰며, NLI/FactKB 모델을
 `FaithfulnessModel` 인터페이스로 주입해 교체할 수 있다.
+
+## 실제 학습 실행 (단일 GPU, CLI)
+
+`examples/train_real.py`가 frozen `HFBackend` + triplet 코퍼스(JSONL) + 트레이너를
+CLI로 묶는다. `--rl`로 **강화학습 알고리즘을 선택**한다: `scst`(기본, self-critical) 또는
+`grpo`(group relative PO). 정책망(fp32)과 샘플링 generator를 백본과 같은 device로 올려 GPU
+실행 시 device 불일치가 없다. 7~13B bf16 백본은 H100 80GB **한 장**에 올라간다.
+
+```bash
+uv sync --extra hf                          # transformers 포함
+
+# SCST (기본)
+CUDA_VISIBLE_DEVICES=0 uv run python -m examples.train_real --rl scst \
+    --model <korean-7B-model> --dtype bfloat16 \
+    --data data/scenarios_ko.jsonl \
+    --steps 2000 --num-samples 5 --grad-accum 4 --ckpt-dir checkpoints
+
+# GRPO (그룹 정규화 advantage + PPO clip + 참조 KL)
+CUDA_VISIBLE_DEVICES=0 uv run python -m examples.train_real --rl grpo \
+    --model <korean-7B-model> --dtype bfloat16 \
+    --data data/scenarios_ko.jsonl \
+    --steps 2000 --group-size 8 --inner-epochs 2 --kl-beta 0.04 \
+    --grad-accum 4 --ckpt-dir checkpoints
+```
+
+`--rl grpo`에서만 쓰이는 노브: `--group-size`(G), `--inner-epochs`(μ), `--kl-beta`,
+`--clip-eps`. GRPO는 로그에 `kl`·`clip` 열이 추가된다. 스모크 테스트: `--limit 4 --steps 5` 를 덧붙인다. 코퍼스는 `data/build_dataset.py`가
+`data/parts/*.jsonl`(원문 한국어 번역 + triplet)을 병합해 `data/scenarios_ko.jsonl`로
+만든다. 라이브러리는 모델 샤딩/데이터 병렬 롤아웃을 구현하지 않으므로 두 번째 H100은
+현재 활용되지 않는다(더 큰 백본 샤딩은 `HFBackend`에 `device_map` 지원 추가 필요).
+
+## 학습된 가중치로 요약 (추론 REPL)
+
+학습이 `checkpoints/`에 저장한 정책망 가중치(`best.pt` 등)를 **붙여서** 요약을 낸다.
+LLM은 frozen, 학습된 소형 정책망만 로드해 **greedy** PMI 디코딩한다. `--ckpt` 기본값은
+`checkpoints/best.pt`.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 uv run python -m examples.summarize \
+    --model <korean-7B-model> --dtype bfloat16 \
+    --ckpt checkpoints/best.pt
+```
+
+원문을 붙여넣고 **빈 줄**로 입력을 끝내면 요약이 나온다. "쿼리"는 요약 **지시문**(`--query`,
+기본 "…군사 표준용어를 사용하여 요약하시오.")이며 REPL에서 바꿀 수 있다.
+
+| REPL 명령어 | 동작 |
+|---|---|
+| *(원문 + 빈 줄)* | 요약 출력 (+ 활성 표준용어, 평균 가중치 `[a,b,c,d]`) |
+| `:query <지시문>` | 요약 지시문 변경 |
+| `:ckpt <경로>` | 다른 체크포인트 즉시 재로드 |
+| `:help` | 도움말 |
+| `:q` / `:quit` / `:exit` | 종료 |
+
+프로그램에서 재사용하려면 `summarize_rl.infer.Summarizer`를 직접 쓴다 (백본 비의존):
+
+```python
+from summarize_rl.infer import Summarizer
+s = Summarizer(backend, policy, cfg, glossary=glossary)
+s.load_checkpoint("checkpoints/best.pt")
+result = s.summarize("적 부대가 이동 중이며 고지를 점령했다.")
+print(result.text, result.active_terms, result.mean_weights)
+```
+
+## 상주 서버 + 대화형 클라이언트 (답만 확인)
+
+무거운 백본을 매번 로드하지 않고, **GPU 1장에 상주시킨 서버**에 대화형 클라이언트로
+질의해 **답(요약)만 확인**한다. `CUDA_VISIBLE_DEVICES`로 카드 1장 고정.
+
+```bash
+# 1) 서버: GPU 3번에 백본+체크포인트 상주
+CUDA_VISIBLE_DEVICES=3 uv run python -m examples.serve \
+    --model <korean-7B-model> --dtype bfloat16 \
+    --ckpt checkpoints/best.pt --host 127.0.0.1 --port 8000
+
+# 2) 클라이언트: 터미널 REPL (모델 없음, 서버에 POST만)
+uv run python -m examples.summarize_client --server http://127.0.0.1:8000
+```
+
+> **왜 vLLM이 아닌가:** 이 요약은 4갈래 PMI *정책망* 디코딩이라 매 스텝 4브랜치의 logits
+> 전체 + hidden state + 대조 결합이 필요하다. 표준 vLLM은 이를 노출하지 않아, 올려도
+> **학습된 가중치가 적용된 요약이 나오지 않는다.** 그래서 `Summarizer`를 감싼 경량 HTTP
+> 서버(stdlib, 추가 의존성 없음)로 상주시킨다.
+
+엔드포인트: `GET /health`, `POST /summarize {source, query?}`, `POST /reload {ckpt}`.
+클라이언트 명령어는 REPL과 동일(`:query`, `:ckpt`, `:help`, `:q`).
+
+### 추론 속도 — 어텐션 커널
+
+vLLM 엔진은 이 4갈래 PMI 디코딩을 못 돌리지만, 융합 어텐션 커널은 그대로 쓸 수 있다.
+`serve.py`/`summarize.py`의 `--attn`으로 선택한다(수치 동일, 품질 영향 없음):
+
+- `sdpa` (기본): torch SDPA, 어디서나 안전하게 빠름.
+- `flash_attention_2`: 가장 빠름. `flash-attn` 설치 필요(없으면 자동으로 `sdpa`→`eager` 폴백).
+- `eager`: 폴백/디버그용.
+
+```bash
+CUDA_VISIBLE_DEVICES=3 uv run python -m examples.serve \
+    --model <model> --ckpt checkpoints/best.pt --attn flash_attention_2
+```
+
+### 추론 속도 — torch.compile + StaticCache (CUDA graph)
+
+`--compile`을 주면 디코드를 **고정 크기 `StaticCache` + `torch.compile`된 모델**로 돌린다.
+매 토큰 스텝의 shape가 고정되어 **CUDA graph로 캡처**되므로 스텝당 파이썬/런치 오버헤드가
+크게 줄어든다(요청 간에도 같은 graph 재사용). 프리필은 길이가 가변이라 eager로 둔다.
+
+```bash
+CUDA_VISIBLE_DEVICES=3 uv run python -m examples.serve \
+    --model <llama/qwen-계열> --ckpt checkpoints/best.pt \
+    --attn flash_attention_2 --compile --max-seq-len 2048
+```
+
+- **StaticCache 호환 아키텍처**(Llama/Qwen/Mistral 등)가 필요하다.
+- **첫 요청은 컴파일 때문에 느리고**, 이후부터 빨라진다.
+- `--max-seq-len`은 (프롬프트+생성) 상한이자 스텝당 어텐션 폭이다. 실제 최대에 가깝게
+  잡아라(너무 크면 스텝마다 낭비 어텐션이 늘어 오히려 느려질 수 있다).
+- 출력은 기본(DynamicCache) 경로와 **토큰 단위로 동일**함이 테스트로 검증돼 있다
+  (`tests/test_compile_static_integration.py`, 소형 Llama).
+
+> 더 큰 가속으로 양자화(4-bit/AWQ/FP8, 메모리 대역폭↓)와 요청 연속 배칭도 가능하다.
+> 특히 양자화는 정책망이 bf16 백본으로 학습됐으므로 요약이 달라질 수 있어 A/B 검증이 필요하다.
 
 ## 설계상 보장
 

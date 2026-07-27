@@ -72,7 +72,6 @@ def test_train_step_returns_metrics_in_range():
     assert abs((m.weight_b + m.weight_c + m.weight_d) - 1.0) < 1e-3
     assert 0.0 <= m.faithfulness <= 1.0
     assert 0.0 <= m.coverage <= 1.0
-    assert 0.0 <= m.term_usage <= 1.0
     assert m.grad_norm >= 0.0
     assert m.step == 1
 

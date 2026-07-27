@@ -56,6 +56,31 @@ class LLMBackend(ABC):
     def decode(self, token_ids: list[int]) -> str:
         """Detokenize generated ids to text (for reward computation)."""
 
+    # -- batched decoding: N rollouts of the SAME prompt at once -------------
+    #
+    # All N rollouts share one prompt (same 4 branch texts); they diverge only
+    # in the tokens they sample. Batching them into one forward (batch = N*4)
+    # is the main training speedup, turning N sequential single-stream decodes
+    # into one wide decode. Batched StepOutput stacks a rollout axis:
+    #   logits [N, num_branches, vocab],  hidden [N, num_branches, hidden].
+
+    def start_batch(self, branch_texts: dict[str, str], n: int) -> tuple[Any, StepOutput]:
+        """Prefill N copies of the prompt. Returns (state, batched StepOutput)."""
+        raise NotImplementedError
+
+    def step_batch(self, state: Any, tokens: list[int]) -> StepOutput:
+        """Advance every rollout by its own token (len(tokens) == N)."""
+        raise NotImplementedError
+
+    def generate_text(self, prompt: str, max_new_tokens: int = 256) -> str:
+        """Plain greedy text generation for an arbitrary prompt.
+
+        Separate from the 4-branch PMI decode: used to have the frozen LLM
+        extract key sentences from a source for the reward. Optional; backends
+        that don't support it can leave this unimplemented.
+        """
+        raise NotImplementedError
+
 
 class MockBackend(LLMBackend):
     """Deterministic backend for tests. No external model.
@@ -136,6 +161,35 @@ class MockBackend(LLMBackend):
         # Deterministic surface form: one token -> "t<id>".
         return " ".join(f"t{t}" for t in token_ids)
 
+    # -- batched decoding ---------------------------------------------------
+
+    def _emit_batch(self, ctx_lens_per_rollout: list[list[int]]) -> StepOutput:
+        logits = torch.stack([
+            torch.stack([self._branch_logits(i, cl[i]) for i in range(len(BRANCH_ORDER))])
+            for cl in ctx_lens_per_rollout
+        ])  # [N, 4, V]
+        hidden = torch.stack([
+            torch.stack([self._branch_hidden(i, cl[i]) for i in range(len(BRANCH_ORDER))])
+            for cl in ctx_lens_per_rollout
+        ])  # [N, 4, D]
+        return StepOutput(logits=logits, hidden=hidden)
+
+    def start_batch(self, branch_texts: dict[str, str], n: int) -> tuple[Any, StepOutput]:
+        base = [max(1, len(branch_texts.get(name, ""))) for name in BRANCH_ORDER]
+        state = {"ctx_lens": [list(base) for _ in range(n)], "n": n}
+        return state, self._emit_batch(state["ctx_lens"])
+
+    def step_batch(self, state: Any, tokens: list[int]) -> StepOutput:
+        # Mock logits depend only on (branch, ctx_len), not on the token, so we
+        # just advance every rollout's context length by one.
+        state["ctx_lens"] = [[c + 1 for c in cl] for cl in state["ctx_lens"]]
+        return self._emit_batch(state["ctx_lens"])
+
+    def generate_text(self, prompt: str, max_new_tokens: int = 256) -> str:
+        # Deterministic stub: echo the last chunk of the prompt (which contains
+        # the source), so key-sentence extraction is reproducible in tests.
+        return prompt.strip()[-max_new_tokens:]
+
 
 class HFBackend(LLMBackend):
     """Wraps a frozen Hugging Face causal LM. transformers imported lazily.
@@ -150,14 +204,39 @@ class HFBackend(LLMBackend):
         model_name: str,
         device: str = "cpu",
         dtype: str = "float32",
+        attn_implementation: str | None = "sdpa",
+        compile_decode: bool = False,
+        max_seq_len: int = 2048,
+        trust_remote_code: bool = False,
+        use_chat_template: bool = True,
     ):
+        """attn_implementation: None (transformers default) | "sdpa" |
+        "flash_attention_2" | "eager". Default "sdpa" is built into PyTorch
+        (no extra install) and already dispatches to FlashAttention / memory-
+        efficient kernels on GPU, so it is fast with identical math. Pass
+        "flash_attention_2" only if the flash-attn package is installed. If the
+        requested kernel is unavailable it falls back (flash_attention_2 -> sdpa
+        -> eager) with a notice, so this never hard-fails.
+
+        compile_decode: if True, decode with a fixed-size ``StaticCache`` and a
+        ``torch.compile``d model so the single-token step has static shapes and
+        can be captured as a CUDA graph (much lower per-step launch overhead).
+        Requires a StaticCache-compatible architecture (Llama/Qwen/Mistral/...).
+        ``max_seq_len`` bounds prompt+generation for the static cache/mask; keep
+        it near your real maximum (larger = more wasted per-step attention).
+        The first call pays a one-time compilation cost.
+        """
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name, trust_remote_code=trust_remote_code
+        )
         torch_dtype = getattr(torch, dtype)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name, dtype=torch_dtype, output_hidden_states=True
-        ).to(device)
+        self.model, self.attn_implementation = self._load_model(
+            AutoModelForCausalLM, model_name, torch_dtype, attn_implementation,
+            trust_remote_code=trust_remote_code,
+        )
+        self.model = self.model.to(device)
         self.model.eval()
         for p in self.model.parameters():
             p.requires_grad_(False)
@@ -171,9 +250,89 @@ class HFBackend(LLMBackend):
         # Left-pad so the last position aligns across branches after prefill.
         self.tokenizer.padding_side = "left"
 
-    @torch.no_grad()
+        # Wrap each branch prompt in the model's chat template when it has one
+        # (instruct models like EXAONE). Without it the raw "[원문]…[지시]…" text
+        # gives no turn structure, so the model rambles and never emits EOS —
+        # producing over-long, duplicated summaries. With it the model answers a
+        # single user turn and stops. No-op for base models with no template.
+        self.use_chat_template = (
+            use_chat_template and getattr(self.tokenizer, "chat_template", None) is not None
+        )
+
+        self.compile_decode = compile_decode
+        self.max_seq_len = max_seq_len
+        # Compile only the single-token decode step (static shapes); prefill
+        # stays eager since its length varies per input.
+        self._decode_model = (
+            torch.compile(self.model, mode="reduce-overhead", fullgraph=False)
+            if compile_decode
+            else self.model
+        )
+
+    @staticmethod
+    def _attn_fallback_chain(requested: str | None) -> list[str | None]:
+        """Ordered kernels to try: requested first, then safe fallbacks."""
+        if requested == "flash_attention_2":
+            return ["flash_attention_2", "sdpa", "eager"]
+        if requested == "sdpa":
+            return ["sdpa", "eager"]
+        return [requested]  # None (transformers default) or explicit "eager"
+
+    @classmethod
+    def _load_model(cls, auto_cls, model_name, torch_dtype, attn_implementation,
+                    trust_remote_code=False):
+        """Load the causal LM, honoring attn_implementation with fallback.
+
+        Returns (model, resolved_impl). ``resolved_impl`` is the kernel actually
+        used (may differ from requested if it fell back).
+        """
+        last_err: Exception | None = None
+        chain = cls._attn_fallback_chain(attn_implementation)
+        for impl in chain:
+            kwargs: dict = {
+                "dtype": torch_dtype,
+                "output_hidden_states": True,
+                "trust_remote_code": trust_remote_code,
+            }
+            if impl is not None:
+                kwargs["attn_implementation"] = impl
+            try:
+                return auto_cls.from_pretrained(model_name, **kwargs), impl
+            except (ImportError, ValueError) as e:
+                last_err = e
+                if impl != chain[-1]:
+                    print(f"[info] attn_implementation={impl} 미설치/미지원 → 다음 커널로 폴백")
+        raise last_err  # type: ignore[misc]
+
+    def _wrap(self, text: str) -> str:
+        """Format `text` as a single user turn via the chat template (if any)."""
+        if not self.use_chat_template:
+            return text
+        return self.tokenizer.apply_chat_template(
+            [{"role": "user", "content": text}],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+
+    def _branch_list(self, branch_texts: dict[str, str]) -> list[str]:
+        """Ordered, chat-template-wrapped branch prompts."""
+        return [self._wrap(branch_texts[name]) for name in BRANCH_ORDER]
+
     def start(self, branch_texts: dict[str, str]) -> tuple[Any, StepOutput]:
-        texts = [branch_texts[name] for name in BRANCH_ORDER]
+        if self.compile_decode:
+            return self._start_static(branch_texts)
+        return self._start_dynamic(branch_texts)
+
+    def step(self, state: Any, token_id: int) -> StepOutput:
+        if self.compile_decode:
+            return self._step_static(state, token_id)
+        return self._step_dynamic(state, token_id)
+
+    # -- dynamic path (DynamicCache, eager) ---------------------------------
+
+    @torch.no_grad()
+    def _start_dynamic(self, branch_texts: dict[str, str]) -> tuple[Any, StepOutput]:
+        texts = self._branch_list(branch_texts)
         enc = self.tokenizer(
             texts, return_tensors="pt", padding=True
         ).to(self.device)
@@ -192,7 +351,7 @@ class HFBackend(LLMBackend):
         return state, StepOutput(logits=logits, hidden=hidden)
 
     @torch.no_grad()
-    def step(self, state: Any, token_id: int) -> StepOutput:
+    def _step_dynamic(self, state: Any, token_id: int) -> StepOutput:
         n = len(BRANCH_ORDER)
         input_ids = torch.full((n, 1), token_id, device=self.device, dtype=torch.long)
         state["attention_mask"] = torch.cat(
@@ -211,5 +370,130 @@ class HFBackend(LLMBackend):
         hidden = out.hidden_states[-1][:, -1, :].float()
         return StepOutput(logits=logits, hidden=hidden)
 
+    # -- batched decoding (dynamic cache; N rollouts of one prompt) ----------
+    #
+    # The N rollouts share the same 4 branch prompts, so we tokenize once and
+    # repeat the 4-row block N times -> batch 4N, laid out rollout-major
+    # (rows [4r, 4r+4) belong to rollout r). This is exactly `_start_dynamic`
+    # with more rows, so it reuses the proven left-padding + KV-cache path.
+
+    @torch.no_grad()
+    def start_batch(self, branch_texts: dict[str, str], n: int) -> tuple[Any, StepOutput]:
+        texts = self._branch_list(branch_texts)
+        enc = self.tokenizer(texts, return_tensors="pt", padding=True).to(self.device)
+        input_ids = enc["input_ids"].repeat(n, 1)          # [4N, L]
+        attention_mask = enc["attention_mask"].repeat(n, 1)  # [4N, L]
+        out = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache=True,
+            output_hidden_states=True,
+        )
+        state = {"past": out.past_key_values, "attention_mask": attention_mask, "n": n}
+        logits = out.logits[:, -1, :].float().view(n, len(BRANCH_ORDER), self.vocab_size)
+        hidden = out.hidden_states[-1][:, -1, :].float().view(n, len(BRANCH_ORDER), self.hidden_size)
+        return state, StepOutput(logits=logits, hidden=hidden)
+
+    @torch.no_grad()
+    def step_batch(self, state: Any, tokens: list[int]) -> StepOutput:
+        n = state["n"]
+        nb = len(BRANCH_ORDER)
+        tok = torch.as_tensor(tokens, device=self.device, dtype=torch.long)  # [N]
+        input_ids = tok.repeat_interleave(nb).unsqueeze(1)  # [4N, 1], rollout-major
+        state["attention_mask"] = torch.cat(
+            [state["attention_mask"], torch.ones((n * nb, 1), device=self.device, dtype=torch.long)],
+            dim=1,
+        )
+        out = self.model(
+            input_ids=input_ids,
+            attention_mask=state["attention_mask"],
+            past_key_values=state["past"],
+            use_cache=True,
+            output_hidden_states=True,
+        )
+        state["past"] = out.past_key_values
+        logits = out.logits[:, -1, :].float().view(n, nb, self.vocab_size)
+        hidden = out.hidden_states[-1][:, -1, :].float().view(n, nb, self.hidden_size)
+        return StepOutput(logits=logits, hidden=hidden)
+
+    # -- static path (StaticCache, compiled single-token step) --------------
+    #
+    # A fixed-size StaticCache + a fixed-width attention mask keep every decode
+    # step at identical shapes, so the compiled step reuses one CUDA graph
+    # across tokens AND across requests. Prefill runs eager (length varies).
+    # Verified to produce token-identical output to the dynamic path.
+
+    @torch.no_grad()
+    def _start_static(self, branch_texts: dict[str, str]) -> tuple[Any, StepOutput]:
+        from transformers import StaticCache
+
+        texts = self._branch_list(branch_texts)
+        enc = self.tokenizer(texts, return_tensors="pt", padding=True).to(self.device)
+        input_ids, attn = enc["input_ids"], enc["attention_mask"]
+        b, prompt_len = input_ids.shape
+        if prompt_len >= self.max_seq_len:
+            raise ValueError(
+                f"prompt length {prompt_len} >= max_seq_len {self.max_seq_len}; "
+                "increase --max-seq-len (or shorten the input)."
+            )
+
+        cache = StaticCache(config=self.model.config, max_cache_len=self.max_seq_len)
+        cache_position = torch.arange(prompt_len, device=self.device)
+        out = self.model(
+            input_ids=input_ids,
+            attention_mask=attn,
+            past_key_values=cache,
+            use_cache=True,
+            output_hidden_states=True,
+            cache_position=cache_position,
+        )
+        # Fixed-width mask: 1 for real prompt tokens, filled in as we generate.
+        mask = torch.zeros((b, self.max_seq_len), dtype=attn.dtype, device=self.device)
+        mask[:, :prompt_len] = attn
+        state = {"cache": cache, "mask": mask, "pos": prompt_len}
+        logits = out.logits[:, -1, :].float()
+        hidden = out.hidden_states[-1][:, -1, :].float()
+        return state, StepOutput(logits=logits, hidden=hidden)
+
+    @torch.no_grad()
+    def _step_static(self, state: Any, token_id: int) -> StepOutput:
+        n = len(BRANCH_ORDER)
+        pos = state["pos"]
+        if pos >= self.max_seq_len:
+            raise ValueError(
+                f"generation exceeded max_seq_len {self.max_seq_len}; "
+                "increase --max-seq-len."
+            )
+        input_ids = torch.full((n, 1), token_id, device=self.device, dtype=torch.long)
+        state["mask"][:, pos] = 1
+        cache_position = torch.tensor([pos], device=self.device)
+        out = self._decode_model(
+            input_ids=input_ids,
+            attention_mask=state["mask"],  # fixed width -> static shape
+            past_key_values=state["cache"],
+            use_cache=True,
+            output_hidden_states=True,
+            cache_position=cache_position,
+        )
+        state["pos"] = pos + 1
+        # Clone: reduce-overhead reuses static output buffers across calls.
+        logits = out.logits[:, -1, :].float().clone()
+        hidden = out.hidden_states[-1][:, -1, :].float().clone()
+        return StepOutput(logits=logits, hidden=hidden)
+
     def decode(self, token_ids: list[int]) -> str:
         return self.tokenizer.decode(token_ids, skip_special_tokens=True)
+
+    @torch.no_grad()
+    def generate_text(self, prompt: str, max_new_tokens: int = 256) -> str:
+        """Greedy text generation for an arbitrary prompt (key-sentence extraction)."""
+        enc = self.tokenizer(self._wrap(prompt), return_tensors="pt").to(self.device)
+        out = self.model.generate(
+            input_ids=enc["input_ids"],
+            attention_mask=enc.get("attention_mask"),
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            pad_token_id=self.pad_token_id,
+        )
+        new_tokens = out[0, enc["input_ids"].shape[1]:]
+        return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
