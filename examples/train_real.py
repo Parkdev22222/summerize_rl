@@ -119,9 +119,13 @@ def main() -> None:
                    help="gate fluency terms (faith/term/contrast) by content recall (cov+keysent) "
                         "to stop fluent-but-off-topic summaries from winning. Off by default.")
     p.add_argument("--w-judge", type=float, default=None,
-                   help="weight of the LLM-as-judge accuracy reward (0=off, default). >0 builds a "
+                   help="weight of the LLM-as-judge reward (0=off, default). >0 builds a "
                         "BackboneJudge from the frozen model: catches semantic errors lexical terms "
                         "miss (e.g. 소대 vs 소총중대), at ~1 extra generation per rollout (slower).")
+    p.add_argument("--judge-comparative", dest="judge_comparative", action="store_true", default=False,
+                   help="pairwise judge vs the RAW frozen-LLM summary ('beat RAW?') instead of the "
+                        "absolute 0-100 score. Discriminative per-rollout signal that directly "
+                        "optimizes beating the base model (needs --w-judge > 0).")
     p.add_argument("--keysent-n", type=int, default=None,
                    help="how many source key sentences the LLM extracts for the key-sentence "
                         "reward (RewardConfig.keysent_n; default 3). Set 0 to disable the term.")
@@ -191,6 +195,7 @@ def main() -> None:
     cfg.reward.balance_content = args.balance_content
     if args.w_judge is not None:
         cfg.reward.w_judge = args.w_judge
+    cfg.reward.judge_comparative = args.judge_comparative
     if args.keysent_n is not None:
         cfg.reward.keysent_n = args.keysent_n
     if args.keysent_max_new_tokens is not None:
@@ -226,11 +231,15 @@ def main() -> None:
         f"examples={len(examples)} steps={cfg.train.total_steps} "
         f"{roll_label}={rollouts} grad_accum(micro-batch)={args.grad_accum}"
     )
+    judge_mode = (
+        ("비교형(vs RAW)" if cfg.reward.judge_comparative else "절대채점")
+        if cfg.reward.w_judge > 0 else "off"
+    )
     print(
         f"reward: balance_content={cfg.reward.balance_content} "
         f"w_judge={cfg.reward.w_judge} "
         f"chat_template={getattr(backend, 'use_chat_template', False)} "
-        f"(judge {'ON' if cfg.reward.w_judge > 0 else 'off'})"
+        f"(judge {judge_mode})"
     )
     # GRPO adds kl / clip columns; the rest of the row is shared.
     extra_hdr = f" {'kl':>6} {'clip':>5}" if is_grpo else ""

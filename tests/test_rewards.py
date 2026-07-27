@@ -215,6 +215,59 @@ def test_judge_receives_key_sentences_and_scores_them():
     assert BackboneJudge(be, RewardConfig()).score("원문", "요약") == 0.72
 
 
+def test_comparative_judge_parses_winner_from_candidate_view():
+    from summarize_rl.judge import _parse_winner
+
+    # cand_first=True -> 'A' means candidate won, 'B' lost; cand_first=False swaps.
+    assert _parse_winner("A", cand_first=True) == 1.0
+    assert _parse_winner("B", cand_first=True) == 0.0
+    assert _parse_winner("A", cand_first=False) == 0.0
+    assert _parse_winner("B", cand_first=False) == 1.0
+    assert _parse_winner("T", cand_first=True) == 0.5      # tie
+    assert _parse_winner("더 나은 요약은 A", cand_first=True) == 1.0  # preamble
+    assert _parse_winner("", cand_first=True) is None      # no verdict
+
+
+def test_comparative_judge_maps_verdict_regardless_of_order():
+    from summarize_rl.judge import BackboneJudge
+    from summarize_rl.llm_backend import MockBackend
+
+    # The judge always says "the candidate is better" (returns the candidate's
+    # presentation letter), so compare() must resolve to 1.0 for both orders.
+    be = MockBackend(vocab_size=16, hidden_size=8, eos_token_id=1)
+
+    def prefer_non_reference(prompt, m=24):
+        # Always pick the slot that is NOT the reference (= the candidate slot),
+        # so the candidate "wins" regardless of which order it was shown in.
+        a_body = prompt.split("[요약 A]\n", 1)[1].split("\n", 1)[0].strip()
+        return "A" if a_body != "REFERENCE" else "B"
+
+    be.generate_text = prefer_non_reference
+    j = BackboneJudge(be, RewardConfig())
+    # two different candidate strings -> different de-bias order parity, both win
+    assert j.compare("원문", "CAND", "REFERENCE") == 1.0
+    assert j.compare("원문", "CANDX", "REFERENCE") == 1.0
+
+
+def test_comparative_judge_enters_reward_when_configured():
+    from summarize_rl.judge import BackboneJudge
+    from summarize_rl.llm_backend import MockBackend
+
+    cfg = RewardConfig(w_judge=1.0, judge_comparative=True)
+    be = MockBackend(vocab_size=16, hidden_size=8, eos_token_id=1)
+    be.generate_text = lambda p, m=24: "A"  # always prefers presentation-A
+    judge = BackboneJudge(be, cfg)
+
+    kw = dict(source="적 부대 이동", triplets=[], active_terms=[], config=cfg)
+    # With a reference + comparative mode, compare() drives the judge term.
+    bd = compute_reward("적 부대 이동", judge_model=judge,
+                        reference_summary="다른 요약", **kw)
+    assert bd.judge in (0.0, 0.5, 1.0)  # win/tie/loss, not an absolute 0-100 map
+    # No reference -> falls back to absolute score() path (no crash).
+    bd2 = compute_reward("적 부대 이동", judge_model=judge, **kw)
+    assert 0.0 <= bd2.judge <= 1.0
+
+
 def test_hallucination_lowers_reward_for_invented_units():
     cfg = RewardConfig()
     source = "제1기계화보병대대가 전차 2대를 파괴하였음"

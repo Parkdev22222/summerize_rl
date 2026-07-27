@@ -118,6 +118,9 @@ class SCSTTrainer:
         self.judge = (
             BackboneJudge(backend, config.reward) if config.reward.w_judge > 0 else None
         )
+        # RAW (frozen-LLM) reference summary per source, for the comparative
+        # judge ("beat RAW"). Generated once per source and cached.
+        self._raw_cache: dict[str, str] = {}
 
         freeze_llm(backend)
 
@@ -143,6 +146,7 @@ class SCSTTrainer:
         active_terms = [a.term for a in active]
         branch_texts = build_branches(example, active).as_dict()
         key_sents = self._key_sentences(example)
+        raw_ref = self._raw_reference(branch_texts, example.source)
 
         # All N rollouts share this prompt -> one batched forward (batch = N*4)
         # instead of N sequential decodes. The recorded log-probs carry grad, so
@@ -163,6 +167,7 @@ class SCSTTrainer:
                 contrast=r.mean_contrast(),
                 key_sentences=key_sents,
                 judge_model=self.judge,
+                reference_summary=raw_ref,
             )
             for r in rollouts
         ]
@@ -173,6 +178,18 @@ class SCSTTrainer:
         if self.key_extractor is None:
             return None
         return self.key_extractor.extract(self.backend, example.source)
+
+    def _raw_reference(self, branch_texts: dict[str, str], source: str) -> str | None:
+        """RAW frozen-LLM summary for this source (cached), for the comparative judge."""
+        r = self.config.reward
+        if not (r.w_judge > 0 and r.judge_comparative):
+            return None
+        if source not in self._raw_cache:
+            with torch.no_grad():
+                self._raw_cache[source] = self.backend.generate_text(
+                    branch_texts["XQ"], self.config.decode.max_new_tokens
+                ).strip()
+        return self._raw_cache[source]
 
     def _greedy_reward(self, example: Example, active_terms: list[str]) -> float:
         active = self.glossary.gate(example.source) if self.glossary else []
@@ -192,6 +209,7 @@ class SCSTTrainer:
             contrast=r.mean_contrast(),
             key_sentences=self._key_sentences(example),
             judge_model=self.judge,
+            reference_summary=self._raw_reference(branch_texts, example.source),
         )
         return bd.total
 

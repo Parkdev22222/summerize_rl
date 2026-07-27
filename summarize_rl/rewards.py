@@ -278,6 +278,7 @@ def compute_reward(
     contrast: float = 0.0,
     key_sentences: list[str] | None = None,
     judge_model: JudgeModel | None = None,
+    reference_summary: str | None = None,
 ) -> RewardBreakdown:
     fm = faithfulness_model or LexicalFaithfulness()
     faith = float(fm.score(summary, source))
@@ -286,10 +287,20 @@ def compute_reward(
     lpen = length_penalty(n_tokens, config, summary)
     copy = extractive_copy(summary, source, n=config.copy_ngram)
     hallu = ungrounded_fact_penalty(summary, source)
-    # LLM-judge accuracy score (0 contribution when no judge / score unavailable).
+    # LLM-judge score (0 contribution when no judge / score unavailable).
+    # Comparative mode (judge_comparative + a reference summary) asks "is this
+    # better than RAW?" -> a discriminative win/tie/loss signal; otherwise the
+    # absolute 0-100 accuracy score is used.
     judge = 0.0
     if judge_model is not None and config.w_judge > 0:
-        js = judge_model.score(source, summary, key_sentences=key_sentences)
+        if (
+            config.judge_comparative
+            and reference_summary is not None
+            and hasattr(judge_model, "compare")
+        ):
+            js = judge_model.compare(source, summary, reference_summary)
+        else:
+            js = judge_model.score(source, summary, key_sentences=key_sentences)
         if js is not None:
             judge = float(js)
     # key_sentences is None when disabled/unavailable -> no contribution (0).

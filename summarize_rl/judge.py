@@ -71,6 +71,7 @@ class BackboneJudge:
         self.backend = backend
         self.max_new_tokens = config.judge_max_new_tokens
         self._cache: dict[tuple[str, str], float | None] = {}
+        self._cmp_cache: dict[tuple[str, str, str], float | None] = {}
 
     def _prompt(self, source: str, summary: str, key_sentences: object | None = None) -> str:
         ks_block = ""
@@ -106,6 +107,68 @@ class BackboneJudge:
         val = _parse_score(text)
         self._cache[key] = val
         return val
+
+    # -- comparative (pairwise vs. a reference) scoring ---------------------
+    def _compare_prompt(self, source: str, a: str, b: str) -> str:
+        return (
+            "당신은 군사 보고서 요약을 채점하는 심사관이다. 아래 [원문]에 대한 두 요약 "
+            "[요약 A]와 [요약 B] 중 어느 것이 원문을 더 잘 요약했는지 고르라.\n"
+            "기준: (1) 부대·수치·지명·사상자를 정확히 반영했는가, (2) 원문에 없는 부대·"
+            "사건·숫자를 지어내지 않았는가, (3) 핵심 상황과 조치·건의를 담았는가, "
+            "(4) 군더더기 없이 간결한가.\n"
+            "더 나은 쪽 문자 하나(A 또는 B)만 출력하라. 우열을 가리기 어려우면 T를 출력하라. "
+            "다른 말은 하지 마라.\n\n"
+            f"[원문]\n{source}\n\n[요약 A]\n{a}\n\n[요약 B]\n{b}\n\n[더 나은 요약]\n"
+        )
+
+    def compare(
+        self, source: str, candidate: str, reference: str
+    ) -> float | None:
+        """Pairwise: is `candidate` a better summary than `reference`?
+
+        Returns 1.0 if the judge prefers the candidate, 0.0 if it prefers the
+        reference, 0.5 for a tie, or None if unparseable. The reference is the
+        RAW frozen-LLM summary, so this directly measures "did the policy beat
+        the base model" -- a discriminative per-rollout signal (unlike the
+        near-constant absolute score). Presentation order is de-biased by a
+        stable hash of the candidate so position bias averages out across
+        rollouts while staying reproducible. Cached per (source, cand, ref).
+        """
+        key = (source, candidate, reference)
+        if key in self._cmp_cache:
+            return self._cmp_cache[key]
+        cand_first = sum(map(ord, candidate)) % 2 == 0  # stable, de-biases order
+        a, b = (candidate, reference) if cand_first else (reference, candidate)
+        try:
+            text = self.backend.generate_text(
+                self._compare_prompt(source, a, b), self.max_new_tokens
+            )
+        except NotImplementedError:
+            self._cmp_cache[key] = None
+            return None
+        val = _parse_winner(text, cand_first)
+        self._cmp_cache[key] = val
+        return val
+
+
+_WINNER_RE = re.compile(r"[ABT]")
+
+
+def _parse_winner(text: str | None, cand_first: bool) -> float | None:
+    """Map the judge's A/B/T verdict to the candidate's win score.
+
+    A/B is the first A/B/T letter in the output; it is translated back through
+    the (possibly swapped) presentation order so the result is always from the
+    candidate's perspective: 1.0 win, 0.0 loss, 0.5 tie, None if no verdict.
+    """
+    m = _WINNER_RE.search((text or "").upper())
+    if not m:
+        return None
+    letter = m.group()
+    if letter == "T":
+        return 0.5
+    cand_letter = "A" if cand_first else "B"
+    return 1.0 if letter == cand_letter else 0.0
 
 
 def _parse_score(text: str | None) -> float | None:

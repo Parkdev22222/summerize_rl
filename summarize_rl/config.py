@@ -93,7 +93,15 @@ class RewardConfig:
     # 소총중대). The trainers build a BackboneJudge (local frozen model) when
     # w_judge>0; a custom JudgeModel (e.g. an external API) can be injected too.
     w_judge: float = 0.0
-    judge_max_new_tokens: int = 24  # room for a short preamble before the 0-100 number
+    # Comparative judge (vs. the RAW frozen-LLM summary) instead of absolute
+    # 0-100 scoring. The absolute score anchors near-constant (~0.85 for any
+    # decent summary), giving almost no learning signal; a pairwise "is this
+    # better than RAW?" verdict is discriminative per rollout and directly
+    # optimizes the objective "beat the base model". Requires w_judge>0 and a
+    # reference summary (the trainers generate + cache the RAW one per source).
+    # judge in [0,1] then reads as the win-rate vs RAW (1 win / 0.5 tie / 0 loss).
+    judge_comparative: bool = False
+    judge_max_new_tokens: int = 24  # room for a short preamble before the score / A|B|T verdict
     target_length: int = 1024  # tokens; overage penalized (kept == decode.max_new_tokens)
     repeat_ngram: int = 3  # n-gram size for repetition penalty
     copy_ngram: int = 4  # n-gram size for the extractive-copy penalty
