@@ -143,6 +143,41 @@ def test_sad_generate_contract():
     print("PASS test_sad_generate_contract")
 
 
+def test_sad_generate_grad_flows_to_fc():
+    """With the backbone frozen (only my_* trainable, as SARA does), generate's
+    scores must carry grad to the FC head so loss.backward() works."""
+    if not HAVE_TORCH:
+        print("SKIP test_sad_generate_grad_flows_to_fc (torch unavailable)")
+        return
+    from types import SimpleNamespace
+    from modeling_exaone_sad import add_sad_head
+
+    model, cfg = _build_fake_causal_lm()
+    model = add_sad_head(model, cfg, fc_fp32=True)
+    for name, p in model.named_parameters():
+        p.requires_grad = ("my_" in name)  # freeze backbone, train FC only
+
+    bs = 2
+    ids = torch.randint(0, cfg.vocab_size, (bs, 5))
+    p = torch.randint(0, cfg.vocab_size, (bs, 3))
+    n = torch.randint(0, cfg.vocab_size, (bs, 2))
+    gc = SimpleNamespace(do_sample=False, top_k=0, top_p=1.0, temperature=1.0,
+                         max_new_tokens=3, min_new_tokens=1,
+                         eos_token_id=None, pad_token_id=0)
+    out = model.generate(
+        input_ids=ids, attention_mask=torch.ones_like(ids),
+        presumm_input=p, presumm_attention_mask=torch.ones_like(p),
+        null_inputs=n, null_attention_mask=torch.ones_like(n),
+        generation_config=gc, num_return_sequences=1,
+    )
+    scores = torch.stack(out.scores, dim=0)  # [steps, bs, vocab]
+    assert scores.requires_grad, "generate scores must carry grad (no @torch.no_grad)"
+    scores.sum().backward()
+    assert model.my_f.weight.grad is not None, "grad must reach the FC head"
+    print("PASS test_sad_generate_grad_flows_to_fc")
+
+
 if __name__ == "__main__":
     test_sad_head_forward_contract()
     test_sad_generate_contract()
+    test_sad_generate_grad_flows_to_fc()

@@ -301,7 +301,6 @@ def _filter_and_pick(logits, gc):
     return torch.argmax(logits, dim=-1)
 
 
-@torch.no_grad()
 def _sad_generate(
     self,
     input_ids=None,
@@ -383,6 +382,8 @@ def _sad_generate(
             combined = m_logits
 
         if step < min_new and eos_id is not None:
+            # clone before in-place so autograd stays valid when grad flows.
+            combined = combined.clone()
             combined[:, eos_id] = float("-inf")
 
         scores.append(combined)
