@@ -35,6 +35,25 @@ GEMINI_API_KEY=... python test_performance_decoder_new_fc.py \
     --judge_weight 0.0 --factkb_weight 0.0
 ```
 
+## TensorBoard로 성능 보기
+SARA 원본엔 TensorBoard가 없어 추가했다. `--tensorboard_logdir <경로>`를 주면 매 학습 스텝마다
+아래 스칼라를 기록한다(비우면 비활성).
+- `train/loss` — RL 손실(`RewardCriterion`).
+- `reward/rougeL` — 샘플 롤아웃의 평균 RougeLsum(주 보상).
+- `reward/triplet_coverage`, `reward/hallu`, `reward/judge` — 각 보상/페널티의 샘플 평균
+  (가중치>0으로 계산될 때만 의미 있는 값; 아니면 0).
+- `reward/weighted_mean` — baseline 차감 전, 가중합된 보상의 샘플 평균(학습이 요약 품질을
+  실제로 올리는지 보는 핵심 곡선).
+
+```bash
+# 학습에 로그 경로 지정
+python test_performance_decoder_new_fc.py ... --tensorboard_logdir ../runs/exaone_ko_500
+# 다른 터미널에서 (레포 루트 기준)
+tensorboard --logdir third_party/SARA/runs
+```
+`reward/weighted_mean`이 우상향하면 정책(FC 가중치)이 더 나은 요약을 뽑도록 학습되는 것이다.
+`train/loss`는 advantage·부호 때문에 0 근처를 오갈 수 있으니 품질 추세는 `reward/*`로 본다.
+
 ## 백본: EXAONE 3.5 Instruct (SAD head 이식)
 
 SARA의 context-aware 디코딩은 원래 fork가 **아키텍처별로 `*ForCausalLM`을 직접 수정**해

@@ -213,10 +213,21 @@ def get_self_critical_reward(greedy_res, data_gts, gen_result, tokenizer, RougeL
 
     # scores = RougeL_reward_weight * scores + Rouge1_reward_weight * Rouge1_scores + Rouge2_reward_weight * Rouge2_scores + factkb_weight * Factkb_scores
 
+    # Per-component means over the SAMPLED rollouts (for TensorBoard); captured
+    # from the raw arrays before the weighted sum / baseline subtraction below.
+    _gs = gen_result_size
+    reward_info = {
+        "rougeL": float(np.mean(scores[:_gs])) if _gs else 0.0,
+        "triplet_coverage": float(np.mean(TripCov_scores[:_gs])) if TripCov_scores.size else 0.0,
+        "hallu": float(np.mean(Hallu_scores[:_gs])) if Hallu_scores.size else 0.0,
+        "judge": float(np.mean(Judge_scores[:_gs])) if Judge_scores.size else 0.0,
+    }
+
     # TODO 和self-critical的reward计算方式一致
     scores = RougeL_reward_weight * scores + Rouge1_reward_weight * Rouge1_scores + Rouge2_reward_weight * Rouge2_scores + factkb_weight * Factkb_scores
     # ported reference-free reward terms: triplet-coverage & judge add, hallucination penalty subtracts
     scores = scores + triplet_coverage_weight * TripCov_scores - hallu_weight * Hallu_scores + judge_weight * Judge_scores
+    reward_info["weighted_mean"] = float(np.mean(scores[:gen_result_size]))
     scores = scores[:gen_result_size].reshape(batch_size, seq_per_img) - scores[-batch_size:][:, np.newaxis]
     
     # scores_tmp = RougeL_reward_weight * scores + Rouge1_reward_weight * Rouge1_scores + Rouge2_reward_weight * Rouge2_scores + factkb_weight * Factkb_scores
@@ -230,7 +241,7 @@ def get_self_critical_reward(greedy_res, data_gts, gen_result, tokenizer, RougeL
 
     rewards = np.repeat(scores[:, np.newaxis], gen_result.shape[1], 1)
 
-    return rewards
+    return rewards, reward_info
 
 
 class RewardCriterion(nn.Module):
@@ -498,6 +509,8 @@ if __name__ == "__main__":
     parser.add_argument("--ablation_null_sequence", action="store_true", help='whether ablation null sequence, gamma=0')
     parser.add_argument("--test_factkb_weight", type=float, default=1.0, help='weight of factkb during model selection')
     parser.add_argument("--logging", type=str, default="./default_decoder.log")
+    parser.add_argument("--tensorboard_logdir", type=str, default="",
+                        help="TensorBoard log dir (empty = disabled). Logs train/loss and reward/* per step.")
     args = parser.parse_args()
 
     # 打印全部
@@ -722,6 +735,16 @@ if __name__ == "__main__":
 
         logger.info("start training!")
 
+        # Optional TensorBoard writer (train/loss + reward/* per step).
+        writer = None
+        if args.tensorboard_logdir:
+            try:
+                from torch.utils.tensorboard import SummaryWriter
+                writer = SummaryWriter(args.tensorboard_logdir)
+                logger.info("TensorBoard logging to %s", args.tensorboard_logdir)
+            except Exception as e:  # noqa: BLE001
+                logger.info("TensorBoard disabled (%s)", e)
+
         # Build the Gemini LLM-as-judge once (reused + cached across the run).
         judge_model = None
         if args.judge_weight > 0:
@@ -791,7 +814,7 @@ if __name__ == "__main__":
                     else:
                         sample_logprobs = F.softmax(scores, dim=-1)
                     
-                    reward = get_self_critical_reward(greedy_res, tokenized_gt.input_ids.to(DEVICE), gen_result, tokenizer,
+                    reward, reward_info = get_self_critical_reward(greedy_res, tokenized_gt.input_ids.to(DEVICE), gen_result, tokenizer,
                                                     args.RougeL_reward_weight, args.Rouge1_reward_weight, args.Rouge2_reward_weight, args.factkb_weight,
                                                     logger, batch_input,
                                                     batch_triplets=batch_triplets,
@@ -856,6 +879,11 @@ if __name__ == "__main__":
                     logger.info("iter {} (epoch {}),  avg_reward = {:.3f}, time/batch = {:.3f}" \
                             .format(iteration, epoch_i, loss.item(), end - start))
 
+                    if writer is not None:
+                        writer.add_scalar("train/loss", loss.item(), iteration)
+                        for _k, _v in reward_info.items():
+                            writer.add_scalar("reward/{}".format(_k), _v, iteration)
+
                     train_loss = loss.item()
                     if math.isinf(train_loss):
                         logger.info("loss == inf, continue")
@@ -888,6 +916,8 @@ if __name__ == "__main__":
                     # Write the training loss summary
                     if (iteration % args.losses_log_every == 0):
                         logger.info('loss_history: iteration: {} reward: {}'.format(iteration, loss))
+                        if writer is not None:
+                            writer.flush()
 
                     # update infos
                     infos['iter'] = iteration
