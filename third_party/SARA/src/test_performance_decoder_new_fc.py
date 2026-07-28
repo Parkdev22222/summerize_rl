@@ -895,7 +895,7 @@ if __name__ == "__main__":
                     # logger.info("iter {} (epoch {}), avg_loss = {:.3f}, avg_reward = {:.3f}, time/batch = {:.3f}" \
                     #         .format(iteration, epoch_i, CE_loss.item(), loss.item(), end - start))
 
-                    logger.info("iter {} (epoch {}),  avg_reward = {:.3f}, time/batch = {:.3f}" \
+                    logger.info("iter {} (epoch {}),  loss = {:.3f}, time/batch = {:.3f}" \
                             .format(iteration, epoch_i, loss.item(), end - start))
 
                     if writer is not None:
@@ -935,7 +935,7 @@ if __name__ == "__main__":
 
                     # Write the training loss summary
                     if (iteration % args.losses_log_every == 0):
-                        logger.info('loss_history: iteration: {} reward: {}'.format(iteration, loss))
+                        logger.info('loss_history: iteration: {} loss: {}'.format(iteration, loss))
                         if writer is not None:
                             writer.flush()
 
