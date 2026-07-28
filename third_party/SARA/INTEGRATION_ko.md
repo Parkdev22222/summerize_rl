@@ -35,22 +35,40 @@ GEMINI_API_KEY=... python test_performance_decoder_new_fc.py \
     --judge_weight 0.0 --factkb_weight 0.0
 ```
 
-## ⚠️ 알려진 제약: 백본(EXAONE 3.5 Instruct)
+## 백본: EXAONE 3.5 Instruct (SAD head 이식)
 
-SARA의 핵심(context-aware FC 디코딩: presumm/null 브랜치 결합)은 **수정된 transformers
-fork의 아키텍처별 클래스**(`LlamaForCausalLM_sft`, `OPTForCausalLM_sft`,
-`GPTNeoForCausalLM_sft`, `MistralForCausalLM_sft`)에만 구현돼 있다
-(`src/utils.py: configure_model_loading*`).
+SARA의 context-aware 디코딩은 원래 fork가 **아키텍처별로 `*ForCausalLM`을 직접 수정**해
+구현한다(`modeling_llama.py`의 `LlamaForCausalLM`: FC 3층 `my_all_f/my_all_f1/my_f` +
+main/presumm/null 3브랜치 `forward` → `weight[bs,3]` 반환). 결합은 fork의
+`generation/utils.py: sample()`에서:
+```
+alpha,beta = softmax(weight[:, :2]);  gamma = sigmoid(weight[:, 2])
+logits = (1+gamma)*(alpha*main + beta*presumm) - gamma*null
+```
 
-- **EXAONE 3.5 Instruct는 자체 아키텍처**(`trust_remote_code`)라 이 목록에 없다. 그대로
-  로드하면 FC 결합/`presumm_input` 커널이 없어 context-aware 학습이 동작하지 않는다.
-- 옵션:
-  1. **Llama 계열 한국어 instruct 모델** 사용 → SARA의 `_sft` 경로를 그대로 활용(권장, 즉시 가능).
-  2. SARA의 `_sft` 수정(FC 레이어 + generate의 presumm/null 결합)을 **EXAONE modeling
-     클래스로 이식** → 별도의 큰 작업.
+EXAONE 3.5는 fork에 없는 자체 아키텍처(`trust_remote_code`)라 정적 modeling 파일을 고칠
+수 없다. 대신 **동일한 SAD head를 로드시점에 주입**한다:
 
-이번 통합의 **보상 3종 + 데이터 어댑터는 백본과 무관**하며 단위 테스트로 검증돼 있다
-(`tests/test_reward_extras.py`, 14/14 통과). 백본만 위 옵션 중 하나로 정하면 된다.
+- `src/modeling_exaone_sad.py`
+  - `forward_once`/`forward`를 `self.get_decoder()`·`self.get_output_embeddings()`만
+    사용하도록 **모델 비의존**으로 구현(EXAONE의 base transformer/lm_head를 그대로 사용).
+  - `add_sad_head(model, config)`: 로드된 `ExaoneForCausalLM`을 SAD 서브클래스로 rebless
+    하고 FC 3층을 head device에 fp32로 부착.
+  - `load_exaone_sad(args)`: `trust_remote_code`로 EXAONE 로드 → SAD head 부착.
+- `src/utils.py: configure_model_loading*`에 `'exaone' in model_name` 분기 추가 →
+  `load_exaone_sad` 호출.
+
+사용: `--model_name_or_path LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct` (또는 2.4B) 지정.
+
+### ⚠️ 반드시 실 하드웨어에서 검증할 것
+- fork는 **transformers 4.36.0**이고 EXAONE 공식 modeling은 더 신버전을 대상으로 한다.
+  `prepare_inputs_for_generation`이 `cache_position` 같은 신 키를 돌려주면 forward가 받도록
+  `forward_once(**kwargs)`로 여유를 뒀으나, EXAONE 원격 코드가 4.36에서 import·동작하는지는
+  **GPU + 실제 모델로 몇 스텝 디코딩해 확인**해야 한다. 필요 시 EXAONE modeling을 4.36
+  내부 API(Cache/attention mask)에 맞춰 소폭 수정.
+- 검증된 부분: SAD head의 forward 계약(`(main,presumm,null,weight[bs,3])` 반환 + 결합식이
+  유한값)을 가짜 base 모델로 확인하는 구조 테스트 `tests/test_exaone_sad.py`(torch 필요,
+  없으면 skip). 보상 3종·데이터 어댑터는 `tests/test_reward_extras.py` 14/14로 검증됨.
 
 ## 검증
 

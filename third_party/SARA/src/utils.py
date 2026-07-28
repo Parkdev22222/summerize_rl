@@ -170,6 +170,12 @@ class ExtendedModel(nn.Module):
 def configure_model_loading(args):
     # TODO: add AWQ and GPTQ models
 
+    # EXAONE 3.5 Instruct is not in the fork's model zoo; load it via its own
+    # remote architecture and attach SARA's context-aware SAD head at runtime.
+    if 'exaone' in args.model_name_or_path.lower():
+        from modeling_exaone_sad import load_exaone_sad
+        return load_exaone_sad(args)
+
     device_name = torch.cuda.get_device_name()
     from transformers import AutoModelForCausalLM
     if "a100" in device_name or "a6000" in device_name:
@@ -245,11 +251,16 @@ def configure_model_loading(args):
 def configure_model_loading_sft(args):
     # TODO: add AWQ and GPTQ models
 
+    # EXAONE 3.5 Instruct: load via remote architecture + attach the SAD head.
+    if 'exaone' in args.model_name_or_path.lower():
+        from modeling_exaone_sad import load_exaone_sad
+        return load_exaone_sad(args)
+
     device_name = torch.cuda.get_device_name()
     from transformers import AutoModelForCausalLM
     if "a100" in device_name or "a6000" in device_name:
         device_allow_flash_attention = True
-    
+
     if args.loading_mode == "nf4":
         from transformers import BitsAndBytesConfig
         nf4_config = BitsAndBytesConfig(

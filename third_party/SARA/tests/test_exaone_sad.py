@@ -1,0 +1,101 @@
+"""Structural test for the model-agnostic SAD head (modeling_exaone_sad.py).
+
+This does NOT need EXAONE or a GPU: it builds a tiny fake `*ForCausalLM` (any
+class exposing get_decoder()/get_output_embeddings()), attaches the SAD head via
+add_sad_head, and checks that forward() returns the
+(main, presumm, null, weight) 4-tuple with weight of shape [bs, 3] — the exact
+contract the fork's generation loop consumes.
+
+Requires torch; skipped (prints SKIP, exits 0) when torch is unavailable so the
+stdlib suite still runs. On a machine with torch:  python -m pytest -q
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+try:
+    import torch
+    import torch.nn as nn
+    from transformers.modeling_outputs import BaseModelOutputWithPast
+    HAVE_TORCH = True
+except Exception:  # noqa: BLE001
+    HAVE_TORCH = False
+
+
+def _build_fake_causal_lm():
+    class Cfg:
+        hidden_size = 16
+        vocab_size = 32
+        alpha_et_hidden_size = 16
+        dropout_rate = 0.0
+        sqrt_dimension = 1
+        sqrt_method = "concate_dim"
+        output_attentions = False
+        output_hidden_states = False
+        use_return_dict = True
+
+    class FakeDecoder(nn.Module):
+        def __init__(self, cfg):
+            super().__init__()
+            self.embed = nn.Embedding(cfg.vocab_size, cfg.hidden_size)
+
+        def forward(self, input_ids=None, inputs_embeds=None, **kw):
+            h = self.embed(input_ids)
+            return BaseModelOutputWithPast(
+                last_hidden_state=h, past_key_values=None,
+                hidden_states=None, attentions=None,
+            )
+
+    class FakeForCausalLM(nn.Module):
+        def __init__(self, cfg):
+            super().__init__()
+            self.config = cfg
+            self.transformer = FakeDecoder(cfg)      # EXAONE names it `transformer`
+            self.lm_head = nn.Linear(cfg.hidden_size, cfg.vocab_size, bias=False)
+
+        def get_decoder(self):
+            return self.transformer
+
+        def get_output_embeddings(self):
+            return self.lm_head
+
+    return FakeForCausalLM(Cfg()), Cfg()
+
+
+def test_sad_head_forward_contract():
+    if not HAVE_TORCH:
+        print("SKIP test_sad_head_forward_contract (torch unavailable)")
+        return
+    from modeling_exaone_sad import add_sad_head
+
+    model, cfg = _build_fake_causal_lm()
+    model = add_sad_head(model, cfg, fc_fp32=True)
+
+    bs, seq = 2, 5
+    ids = torch.randint(0, cfg.vocab_size, (bs, seq))
+    presumm = torch.randint(0, cfg.vocab_size, (bs, seq))
+    null = torch.randint(0, cfg.vocab_size, (bs, seq))
+
+    out = model(input_ids=ids, presumm_input_ids=presumm, null_input_ids=null)
+    assert isinstance(out, tuple) and len(out) == 4, "forward must return 4-tuple"
+    main_out, presumm_out, null_out, weight = out
+    assert main_out.logits.shape == (bs, seq, cfg.vocab_size)
+    assert presumm_out.logits.shape == (bs, seq, cfg.vocab_size)
+    assert null_out.logits.shape == (bs, seq, cfg.vocab_size)
+    assert weight.shape == (bs, 3), f"weight must be [bs,3], got {tuple(weight.shape)}"
+
+    # The combination the fork's sample() applies must be finite/well-formed.
+    alpha_beta = torch.softmax(weight[:, :2], dim=1)
+    gamma = torch.sigmoid(weight[:, 2]).unsqueeze(1)
+    alpha, beta = alpha_beta[:, 0:1], alpha_beta[:, 1:2]
+    main_l = main_out.logits[:, -1, :]
+    combined = (1 + gamma) * (alpha * main_l + beta * presumm_out.logits[:, -1, :]) - gamma * null_out.logits[:, -1, :]
+    assert combined.shape == (bs, cfg.vocab_size)
+    assert torch.isfinite(combined).all()
+    print("PASS test_sad_head_forward_contract")
+
+
+if __name__ == "__main__":
+    test_sad_head_forward_contract()
