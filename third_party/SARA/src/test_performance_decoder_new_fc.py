@@ -141,8 +141,11 @@ def get_self_critical_reward(greedy_res, data_gts, gen_result, tokenizer, RougeL
     TripCov_scores, Hallu_scores, Judge_scores = [], [], []
     evaluator = Evaluator()
 
-    # Only compute (and pay for) a ported metric when its weight is on.
-    metrics = ["rouge", 'factkb']
+    # Only compute (and pay for) a metric when its weight is on. FactKB needs a
+    # local RoBERTa model (../data/pretrained_models/*), so skip it unless used.
+    metrics = ["rouge"]
+    if factkb_weight > 0:
+        metrics.append("factkb")
     if triplet_coverage_weight > 0:
         metrics.append("triplet_coverage")
     if hallu_weight > 0:
@@ -160,7 +163,7 @@ def get_self_critical_reward(greedy_res, data_gts, gen_result, tokenizer, RougeL
         scores.append(result_dict['rougeLsum_fmeasure'])
         Rouge1_scores.append(result_dict['rouge1_fmeasure'])
         Rouge2_scores.append(result_dict['rouge2_fmeasure'])
-        Factkb_scores.append(result_dict['factkb'])
+        Factkb_scores.append(result_dict.get('factkb', 0.0))
         TripCov_scores.append(result_dict.get('triplet_coverage', 0.0))
         Hallu_scores.append(result_dict.get('hallu', 0.0))
         Judge_scores.append(result_dict.get('judge', 0.0))
