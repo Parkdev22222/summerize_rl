@@ -16,6 +16,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 try:
+    from types import SimpleNamespace
+
     import torch
     import torch.nn as nn
     from transformers.modeling_outputs import BaseModelOutputWithPast
@@ -59,7 +61,14 @@ def _build_fake_causal_lm():
             return self.transformer
 
         def get_output_embeddings(self):
-            return self.lm_head
+            # Emulate EXAONE's tied-embedding case where this returns None; the SAD
+            # generate must not rely on it (it calls the native forward instead).
+            return None
+
+        def forward(self, input_ids=None, output_hidden_states=False, **kw):
+            h = self.transformer(input_ids=input_ids).last_hidden_state
+            logits = self.lm_head(h)
+            return SimpleNamespace(logits=logits, hidden_states=(h,), past_key_values=None)
 
     return FakeForCausalLM(Cfg()), Cfg()
 

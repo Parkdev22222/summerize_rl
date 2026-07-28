@@ -57,18 +57,31 @@ def _forward_once(
     return_dict=None,
     **kwargs,  # tolerate backbone-specific extras (e.g. cache_position)
 ):
-    """Single-branch forward: run the base transformer + lm_head once.
+    """Single-branch forward: run the backbone once -> (CausalLMOutput, last_hidden).
 
-    Returns (CausalLMOutputWithPast, last_hidden_state) exactly like the fork's
-    LlamaForCausalLM.forward_once, but resolves the base model and head via the
-    generic get_decoder()/get_output_embeddings() accessors.
+    Uses the backbone's OWN forward (``_sad_base_forward``, captured in
+    add_sad_head) so logits are computed natively — EXAONE ties embeddings and
+    get_output_embeddings() can be None, so we never call lm_head ourselves.
+    ``output_hidden_states=True`` yields the last-layer hidden for the FC head.
     """
-    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-    output_hidden_states = (
-        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-    )
-    return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+    base_forward = getattr(self, "_sad_base_forward", None)
+    if base_forward is not None:
+        out = base_forward(
+            self,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_hidden_states=True,
+            return_dict=True,
+            **kwargs,
+        )
+        return out, out.hidden_states[-1]
 
+    # Fallback for backbones that expose lm_head (get_output_embeddings not None).
+    return_dict = return_dict if return_dict is not None else self.config.use_return_dict
     decoder = self.get_decoder()
     outputs = decoder(
         input_ids=input_ids,
@@ -77,28 +90,13 @@ def _forward_once(
         past_key_values=past_key_values,
         inputs_embeds=inputs_embeds,
         use_cache=use_cache,
-        output_attentions=output_attentions,
-        output_hidden_states=output_hidden_states,
+        output_hidden_states=True,
         return_dict=True,
     )
-
-    last_hidden_state = outputs.last_hidden_state  # [bs, seq, hidden]
-    hidden_states = outputs[0]
-
-    lm_head = self.get_output_embeddings()
-    logits = lm_head(hidden_states).float()
-
-    loss = None
-    if labels is not None:
-        shift_logits = logits[..., :-1, :].contiguous()
-        shift_labels = labels[..., 1:].contiguous()
-        loss_fct = CrossEntropyLoss()
-        shift_logits = shift_logits.view(-1, self.config.vocab_size)
-        shift_labels = shift_labels.view(-1).to(shift_logits.device)
-        loss = loss_fct(shift_logits, shift_labels)
-
+    last_hidden_state = outputs.last_hidden_state
+    logits = self.get_output_embeddings()(outputs[0]).float()
     return CausalLMOutputWithPast(
-        loss=loss,
+        loss=None,
         logits=logits,
         past_key_values=outputs.past_key_values,
         hidden_states=outputs.hidden_states,
@@ -246,28 +244,35 @@ def _position_ids_from_mask(attn_mask, cur_len):
     return pos[:, -cur_len:]
 
 
-def _branch_step(decoder, lm_head, input_step, attn_mask, past, past_len):
+def _branch_step(model, input_step, attn_mask, past, past_len):
     """One branch forward for the current step -> (last_logits, last_hidden, new_past).
 
-    Uses only the base decoder's stable forward args so it works on old and new
-    transformers alike. `attn_mask` is the FULL mask (past+current); `input_step`
-    is the full prompt on step 0 and the single new token afterwards.
+    Calls the backbone's OWN ``*ForCausalLM.forward`` (captured as
+    ``model._sad_base_forward``) so that lm_head / tied embeddings / any
+    architecture-specific logit computation are handled natively — we do not call
+    lm_head ourselves (EXAONE's get_output_embeddings() can be None when tied).
+    ``output_hidden_states=True`` gives the last-layer hidden for the FC head.
+    Uses only stable forward args so it works across transformers versions.
+    ``attn_mask`` is the FULL mask (past+current); ``input_step`` is the full
+    prompt on step 0 and the single new token afterwards.
     """
     cur_len = input_step.shape[1]
     device = input_step.device
     position_ids = _position_ids_from_mask(attn_mask, cur_len)
     cache_position = torch.arange(past_len, past_len + cur_len, device=device)
-    out = decoder(
+    out = model._sad_base_forward(
+        model,
         input_ids=input_step,
         attention_mask=attn_mask,
         position_ids=position_ids,
         past_key_values=past,
         use_cache=True,
         cache_position=cache_position,
+        output_hidden_states=True,
         return_dict=True,
     )
-    hidden_last = out.last_hidden_state[:, -1, :]
-    logits_last = lm_head(hidden_last).float()
+    logits_last = out.logits[:, -1, :].float()
+    hidden_last = out.hidden_states[-1][:, -1, :]
     return logits_last, hidden_last, out.past_key_values
 
 
@@ -322,8 +327,6 @@ def _sad_generate(
     """
     gc = generation_config
     device = input_ids.device
-    decoder = self.get_decoder()
-    lm_head = self.get_output_embeddings()
 
     eos_id = getattr(gc, "eos_token_id", None)
     if isinstance(eos_id, (list, tuple)):
@@ -362,12 +365,12 @@ def _sad_generate(
     plen_m = plen_p = plen_n = 0
 
     for step in range(max_new):
-        m_logits, m_h, past_m = _branch_step(decoder, lm_head, cur_m, m_mask, past_m, plen_m)
+        m_logits, m_h, past_m = _branch_step(self, cur_m, m_mask, past_m, plen_m)
         plen_m += cur_m.shape[1]
 
         if have_ctx:
-            p_logits, p_h, past_p = _branch_step(decoder, lm_head, cur_p, p_mask, past_p, plen_p)
-            n_logits, n_h, past_n = _branch_step(decoder, lm_head, cur_n, n_mask, past_n, plen_n)
+            p_logits, p_h, past_p = _branch_step(self, cur_p, p_mask, past_p, plen_p)
+            n_logits, n_h, past_n = _branch_step(self, cur_n, n_mask, past_n, plen_n)
             plen_p += cur_p.shape[1]
             plen_n += cur_n.shape[1]
 
@@ -427,6 +430,9 @@ def add_sad_head(model, config, fc_fp32: bool = True):
         },
     )
     model.__class__ = sad_cls
+    # Keep the backbone's ORIGINAL forward so per-branch steps compute logits the
+    # native way (handles lm_head / tied embeddings); _branch_step calls this.
+    model._sad_base_forward = base_cls.forward
 
     # SAD hyperparameters (set on config by the loader).
     model.alpha_et_hidden_size = config.alpha_et_hidden_size
@@ -444,12 +450,11 @@ def add_sad_head(model, config, fc_fp32: bool = True):
     model.relu2 = nn.ReLU()
     model.dropout = nn.Dropout(p=dropout_rate)
 
-    # Place the new layers on the head's device; fp32 for stable weight learning.
-    try:
-        dev = model.get_output_embeddings().weight.device
-    except Exception:
-        dev = next(model.parameters()).device
-    dtype = torch.float32 if fc_fp32 else model.get_output_embeddings().weight.dtype
+    # Place the new layers on the model's device; fp32 for stable weight learning.
+    # (get_output_embeddings() can be None on tied models, so don't rely on it.)
+    ref_param = next(model.parameters())
+    dev = ref_param.device
+    dtype = torch.float32 if fc_fp32 else ref_param.dtype
     for m in (model.my_all_f, model.my_all_f1, model.my_f):
         m.to(device=dev, dtype=dtype)
     return model
