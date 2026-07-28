@@ -97,5 +97,43 @@ def test_sad_head_forward_contract():
     print("PASS test_sad_head_forward_contract")
 
 
+def test_sad_generate_contract():
+    if not HAVE_TORCH:
+        print("SKIP test_sad_generate_contract (torch unavailable)")
+        return
+    from types import SimpleNamespace
+    from modeling_exaone_sad import add_sad_head
+
+    model, cfg = _build_fake_causal_lm()
+    model = add_sad_head(model, cfg, fc_fp32=True)
+
+    bs, seq, nrs, max_new = 2, 5, 2, 4
+    ids = torch.randint(0, cfg.vocab_size, (bs, seq))
+    mask = torch.ones(bs, seq, dtype=torch.long)
+    p = torch.randint(0, cfg.vocab_size, (bs, 3))
+    n = torch.randint(0, cfg.vocab_size, (bs, 2))
+    gc = SimpleNamespace(do_sample=True, top_k=0, top_p=1.0, temperature=1.0,
+                         max_new_tokens=max_new, min_new_tokens=2,
+                         eos_token_id=None, pad_token_id=0)
+
+    out = model.generate(
+        input_ids=ids, attention_mask=mask,
+        presumm_input=p, presumm_attention_mask=torch.ones_like(p),
+        null_inputs=n, null_attention_mask=torch.ones_like(n),
+        generation_config=gc, num_return_sequences=nrs,
+        return_dict_in_generate=True, output_scores=True,
+    )
+    # sequences = expanded main prompt (seq) + generated tokens; scores per step.
+    assert out.sequences.shape[0] == bs * nrs, "num_return_sequences expansion"
+    assert len(out.scores) == max_new, f"expected {max_new} score steps"
+    assert out.sequences.shape[1] == seq + len(out.scores), "prompt prefix + generated"
+    assert out.scores[0].shape == (bs * nrs, cfg.vocab_size)
+    # slicing off the prompt (as the training loop does) yields the generated ids.
+    gen = out.sequences[:, seq:]
+    assert gen.shape == (bs * nrs, max_new)
+    print("PASS test_sad_generate_contract")
+
+
 if __name__ == "__main__":
     test_sad_head_forward_contract()
+    test_sad_generate_contract()

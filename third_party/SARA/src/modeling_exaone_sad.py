@@ -31,6 +31,8 @@ GPU before training; see INTEGRATION_ko.md.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
@@ -208,6 +210,201 @@ def _sad_forward(
 
 
 # --------------------------------------------------------------------------- #
+# Self-contained context-aware generation (works on modern transformers)        #
+#                                                                              #
+# SARA's original 3-branch decoding lives in its transformers *fork*'s         #
+# generation loop. EXAONE only runs on modern transformers, so instead of      #
+# depending on the fork we reproduce that loop here, using ONLY the base        #
+# decoder's core forward contract (input_ids/attention_mask/position_ids/       #
+# past_key_values/cache_position) so it is robust across transformers versions. #
+# --------------------------------------------------------------------------- #
+
+def _weight_from_hidden(model, mh, ph, nh):
+    """FC head: concat last-token hidden of (main, presumm, null) -> weight[bs,3]."""
+    x = torch.cat([mh, ph, nh], dim=-1).to(model.my_all_f.weight.dtype)
+    x = model.my_all_f(x)
+    if model.sqrt_dimension:
+        if model.sqrt_method == "concate_dim":
+            x = x / torch.sqrt(torch.tensor(x.size(-1), dtype=torch.float32))
+        elif model.sqrt_method == "sqrt05":
+            x = x / torch.sqrt(torch.tensor(mh.size(-1), dtype=torch.float32))
+    x = model.dropout(model.relu(x))
+    x = model.my_all_f1(x)
+    if model.sqrt_dimension:
+        if model.sqrt_method == "concate_dim":
+            x = x / torch.sqrt(torch.tensor(x.size(-1), dtype=torch.float32))
+        elif model.sqrt_method == "sqrt05":
+            x = x / torch.sqrt(torch.tensor(mh.size(-1), dtype=torch.float32))
+    x = model.dropout(model.relu2(x))
+    return model.my_f(x)  # [bs, 3]
+
+
+def _position_ids_from_mask(attn_mask, cur_len):
+    """Left-padding-aware position ids; return the last `cur_len` columns."""
+    pos = attn_mask.long().cumsum(-1) - 1
+    pos = pos.masked_fill(attn_mask == 0, 0)
+    return pos[:, -cur_len:]
+
+
+def _branch_step(decoder, lm_head, input_step, attn_mask, past, past_len):
+    """One branch forward for the current step -> (last_logits, last_hidden, new_past).
+
+    Uses only the base decoder's stable forward args so it works on old and new
+    transformers alike. `attn_mask` is the FULL mask (past+current); `input_step`
+    is the full prompt on step 0 and the single new token afterwards.
+    """
+    cur_len = input_step.shape[1]
+    device = input_step.device
+    position_ids = _position_ids_from_mask(attn_mask, cur_len)
+    cache_position = torch.arange(past_len, past_len + cur_len, device=device)
+    out = decoder(
+        input_ids=input_step,
+        attention_mask=attn_mask,
+        position_ids=position_ids,
+        past_key_values=past,
+        use_cache=True,
+        cache_position=cache_position,
+        return_dict=True,
+    )
+    hidden_last = out.last_hidden_state[:, -1, :]
+    logits_last = lm_head(hidden_last).float()
+    return logits_last, hidden_last, out.past_key_values
+
+
+def _filter_and_pick(logits, gc):
+    """Apply temperature/top-k/top-p and sample (or argmax if do_sample is False)."""
+    temp = getattr(gc, "temperature", 1.0) or 1.0
+    if temp != 1.0:
+        logits = logits / temp
+    if getattr(gc, "do_sample", False):
+        top_k = getattr(gc, "top_k", 0) or 0
+        if top_k and top_k > 0:
+            kth = torch.topk(logits, min(top_k, logits.size(-1)), dim=-1)[0][..., -1, None]
+            logits = logits.masked_fill(logits < kth, float("-inf"))
+        top_p = getattr(gc, "top_p", 1.0)
+        top_p = 1.0 if top_p is None else top_p
+        if top_p < 1.0:
+            sorted_logits, sorted_idx = torch.sort(logits, descending=True, dim=-1)
+            cum = torch.softmax(sorted_logits, dim=-1).cumsum(dim=-1)
+            sorted_remove = cum > top_p
+            sorted_remove[..., 1:] = sorted_remove[..., :-1].clone()
+            sorted_remove[..., 0] = False
+            remove = sorted_remove.scatter(-1, sorted_idx, sorted_remove)
+            logits = logits.masked_fill(remove, float("-inf"))
+        probs = torch.softmax(logits, dim=-1)
+        return torch.multinomial(probs, num_samples=1).squeeze(1)
+    return torch.argmax(logits, dim=-1)
+
+
+@torch.no_grad()
+def _sad_generate(
+    self,
+    input_ids=None,
+    attention_mask=None,
+    presumm_input=None,
+    presumm_attention_mask=None,
+    null_inputs=None,
+    null_attention_mask=None,
+    generation_config=None,
+    num_return_sequences=1,
+    return_dict_in_generate=True,
+    output_scores=True,
+    **kwargs,
+):
+    """Context-aware 3-branch generation returning .sequences and .scores.
+
+    Mirrors SARA's fork sample()/greedy loop:
+        alpha,beta = softmax(weight[:, :2]);  gamma = sigmoid(weight[:, 2])
+        logits = (1+gamma)*(alpha*main + beta*presumm) - gamma*null
+    but is self-contained so it runs on the model's own (modern) transformers.
+    `sequences` includes the main prompt prefix (the caller slices it off);
+    `scores` is a per-step tuple of the combined logits (used by the RL loss).
+    """
+    gc = generation_config
+    device = input_ids.device
+    decoder = self.get_decoder()
+    lm_head = self.get_output_embeddings()
+
+    eos_id = getattr(gc, "eos_token_id", None)
+    if isinstance(eos_id, (list, tuple)):
+        eos_id = eos_id[0] if eos_id else None
+    pad_id = getattr(gc, "pad_token_id", None)
+    if pad_id is None:
+        pad_id = eos_id if eos_id is not None else 0
+    max_new = int(getattr(gc, "max_new_tokens", 64) or 64)
+    min_new = int(getattr(gc, "min_new_tokens", 0) or 0)
+
+    nrs = int(num_return_sequences or 1)
+
+    def _expand(t):
+        return None if t is None else t.repeat_interleave(nrs, dim=0)
+
+    def _mask_for(ids, mask):
+        if ids is None:
+            return None
+        return _expand(mask) if mask is not None else torch.ones_like(ids).repeat_interleave(nrs, dim=0)
+
+    m_ids = _expand(input_ids)
+    m_mask = _expand(attention_mask) if attention_mask is not None else torch.ones_like(m_ids)
+    p_ids, p_mask = _expand(presumm_input), _mask_for(presumm_input, presumm_attention_mask)
+    n_ids, n_mask = _expand(null_inputs), _mask_for(null_inputs, null_attention_mask)
+
+    bsz = m_ids.shape[0]
+    # Context-aware combination needs both extra branches; otherwise fall back to
+    # plain single-branch decoding (the training path always supplies them).
+    have_ctx = p_ids is not None and n_ids is not None
+    generated = m_ids
+    unfinished = torch.ones(bsz, dtype=torch.long, device=device)
+    scores = []
+
+    cur_m, cur_p, cur_n = m_ids, p_ids, n_ids
+    past_m = past_p = past_n = None
+    plen_m = plen_p = plen_n = 0
+
+    for step in range(max_new):
+        m_logits, m_h, past_m = _branch_step(decoder, lm_head, cur_m, m_mask, past_m, plen_m)
+        plen_m += cur_m.shape[1]
+
+        if have_ctx:
+            p_logits, p_h, past_p = _branch_step(decoder, lm_head, cur_p, p_mask, past_p, plen_p)
+            n_logits, n_h, past_n = _branch_step(decoder, lm_head, cur_n, n_mask, past_n, plen_n)
+            plen_p += cur_p.shape[1]
+            plen_n += cur_n.shape[1]
+
+            weight = _weight_from_hidden(self, m_h, p_h, n_h)
+            ab = torch.softmax(weight[:, :2], dim=1)
+            alpha, beta = ab[:, 0:1], ab[:, 1:2]
+            gamma = torch.sigmoid(weight[:, 2]).unsqueeze(1)
+            combined = (1 + gamma) * (alpha * m_logits + beta * p_logits) - gamma * n_logits
+        else:
+            combined = m_logits
+
+        if step < min_new and eos_id is not None:
+            combined[:, eos_id] = float("-inf")
+
+        scores.append(combined)
+        next_token = _filter_and_pick(combined, gc)
+        if eos_id is not None:
+            next_token = next_token * unfinished + pad_id * (1 - unfinished)
+
+        generated = torch.cat([generated, next_token[:, None]], dim=1)
+        ones = torch.ones((bsz, 1), dtype=m_mask.dtype, device=device)
+        m_mask = torch.cat([m_mask, ones], dim=1)
+        cur_m = next_token[:, None]
+        if have_ctx:
+            p_mask = torch.cat([p_mask, ones], dim=1)
+            n_mask = torch.cat([n_mask, ones], dim=1)
+            cur_p = cur_n = next_token[:, None]
+
+        if eos_id is not None:
+            unfinished = unfinished * (next_token != eos_id).long()
+            if int(unfinished.max()) == 0:
+                break
+
+    return SimpleNamespace(sequences=generated, scores=tuple(scores))
+
+
+# --------------------------------------------------------------------------- #
 # Attaching the head to a loaded backbone                                      #
 # --------------------------------------------------------------------------- #
 
@@ -223,7 +420,11 @@ def add_sad_head(model, config, fc_fp32: bool = True):
     sad_cls = type(
         base_cls.__name__ + "_SAD",
         (base_cls,),
-        {"forward": _sad_forward, "forward_once": _forward_once},
+        {
+            "forward": _sad_forward,
+            "forward_once": _forward_once,
+            "generate": _sad_generate,  # self-contained 3-branch context-aware decode
+        },
     )
     model.__class__ = sad_cls
 

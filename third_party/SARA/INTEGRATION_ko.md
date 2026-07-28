@@ -60,15 +60,29 @@ EXAONE 3.5는 fork에 없는 자체 아키텍처(`trust_remote_code`)라 정적 
 
 사용: `--model_name_or_path LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct` (또는 2.4B) 지정.
 
-### ⚠️ 반드시 실 하드웨어에서 검증할 것
-- fork는 **transformers 4.36.0**이고 EXAONE 공식 modeling은 더 신버전을 대상으로 한다.
-  `prepare_inputs_for_generation`이 `cache_position` 같은 신 키를 돌려주면 forward가 받도록
-  `forward_once(**kwargs)`로 여유를 뒀으나, EXAONE 원격 코드가 4.36에서 import·동작하는지는
-  **GPU + 실제 모델로 몇 스텝 디코딩해 확인**해야 한다. 필요 시 EXAONE modeling을 4.36
-  내부 API(Cache/attention mask)에 맞춰 소폭 수정.
-- 검증된 부분: SAD head의 forward 계약(`(main,presumm,null,weight[bs,3])` 반환 + 결합식이
-  유한값)을 가짜 base 모델로 확인하는 구조 테스트 `tests/test_exaone_sad.py`(torch 필요,
-  없으면 skip). 보상 3종·데이터 어댑터는 `tests/test_reward_extras.py` 14/14로 검증됨.
+### fork 불필요 — 자체 context-aware generate 사용
+원래 SARA의 3브랜치 결합은 **fork(transformers 4.36)의 `generation/utils.py: sample()`** 에만
+있었다. 하지만 EXAONE 3.5는 최신 transformers에서만 로드되므로, fork에 의존하지 않도록
+**`modeling_exaone_sad.py`에 동일한 결합 로직의 자체 `generate`(`_sad_generate`)를 구현**해
+SAD 모델에 바인딩했다. 덕분에 **사용자의 최신 transformers 그대로**에서 동작한다(구버전 fork
+설치 불필요).
+
+- `_sad_generate`: main/presumm/null 3브랜치를 각자 KV캐시로 스텝 생성하며 매 스텝
+  `(1+γ)(α·main+β·presumm)−γ·null`로 결합. `.sequences`(프롬프트+생성)·`.scores`(스텝별
+  결합 logits) 반환 — SARA 학습 루프가 기대하는 형식 그대로. top-k/top-p/temperature,
+  min/max_new_tokens, EOS, `num_return_sequences` 지원. presumm/null이 없으면 단일 브랜치로
+  폴백(테스트 경로 안전).
+- 캐시/포지션은 base decoder의 **표준 forward 인자**(`input_ids/attention_mask/position_ids/
+  past_key_values/cache_position`)만 사용 → transformers 버전에 견고. 좌측 패딩 대응.
+
+### ⚠️ 실 하드웨어 검증 권장
+- 검증된 부분(torch로 실제 PASS): `tests/test_exaone_sad.py`
+  - `test_sad_head_forward_contract`: forward가 `(main,presumm,null,weight[bs,3])` 반환 + 결합 유한값.
+  - `test_sad_generate_contract`: `generate`가 `.sequences[bs·nrs, prompt+gen]`·`.scores`(스텝별
+    `[bs·nrs, vocab]`) 반환, 프롬프트 슬라이싱으로 생성 토큰 추출.
+- 미검증: 실제 EXAONE 가중치로 GPU에서 몇 스텝 디코딩. 최신 transformers의 EXAONE base
+  forward가 위 표준 인자를 그대로 받는지만 GPU에서 1회 확인하면 된다(대부분 그대로 동작).
+- 보상 3종·데이터 어댑터: `tests/test_reward_extras.py` 14/14 통과.
 
 ## 검증
 
