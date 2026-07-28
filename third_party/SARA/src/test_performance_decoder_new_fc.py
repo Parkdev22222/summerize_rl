@@ -221,6 +221,9 @@ def get_self_critical_reward(greedy_res, data_gts, gen_result, tokenizer, RougeL
     _gs = gen_result_size
     reward_info = {
         "rougeL": float(np.mean(scores[:_gs])) if _gs else 0.0,
+        "rouge1": float(np.mean(Rouge1_scores[:_gs])) if _gs else 0.0,
+        "rouge2": float(np.mean(Rouge2_scores[:_gs])) if _gs else 0.0,
+        "factkb": float(np.mean(Factkb_scores[:_gs])) if _gs else 0.0,
         "triplet_coverage": float(np.mean(TripCov_scores[:_gs])) if TripCov_scores.size else 0.0,
         "judge": float(np.mean(Judge_scores[:_gs])) if Judge_scores.size else 0.0,
     }
