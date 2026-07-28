@@ -140,6 +140,17 @@ def test_sad_generate_contract():
     # slicing off the prompt (as the training loop does) yields the generated ids.
     gen = out.sequences[:, seq:]
     assert gen.shape == (bs * nrs, max_new)
+
+    # default (no return_dict_in_generate) must yield a plain TENSOR, so test()'s
+    # `output[:, prompt_len:]` slicing works (regression for the SimpleNamespace bug).
+    out_t = model.generate(
+        input_ids=ids, attention_mask=torch.ones_like(ids),
+        presumm_input=p, presumm_attention_mask=torch.ones_like(p),
+        null_inputs=n, null_attention_mask=torch.ones_like(n),
+        generation_config=gc, num_return_sequences=nrs,
+    )
+    assert isinstance(out_t, torch.Tensor), "default generate must return a tensor"
+    assert out_t[:, seq:].shape[0] == bs * nrs  # subscriptable like HF sequences
     print("PASS test_sad_generate_contract")
 
 
@@ -168,7 +179,7 @@ def test_sad_generate_grad_flows_to_fc():
         input_ids=ids, attention_mask=torch.ones_like(ids),
         presumm_input=p, presumm_attention_mask=torch.ones_like(p),
         null_inputs=n, null_attention_mask=torch.ones_like(n),
-        generation_config=gc, num_return_sequences=1,
+        generation_config=gc, num_return_sequences=1, return_dict_in_generate=True,
     )
     scores = torch.stack(out.scores, dim=0)  # [steps, bs, vocab]
     assert scores.requires_grad, "generate scores must carry grad (no @torch.no_grad)"

@@ -317,7 +317,7 @@ class BackboneJudge:
             with torch.no_grad():
                 out = self.model.generate(
                     input_ids=input_ids, attention_mask=attn,
-                    generation_config=gc,
+                    generation_config=gc, return_dict_in_generate=True,
                 )
             gen = out.sequences[:, input_ids.shape[1]:]
             text = tok.decode(gen[0], skip_special_tokens=True)

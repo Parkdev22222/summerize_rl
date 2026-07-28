@@ -311,7 +311,7 @@ def _sad_generate(
     null_attention_mask=None,
     generation_config=None,
     num_return_sequences=1,
-    return_dict_in_generate=True,
+    return_dict_in_generate=False,
     output_scores=True,
     **kwargs,
 ):
@@ -405,7 +405,9 @@ def _sad_generate(
             if int(unfinished.max()) == 0:
                 break
 
-    return SimpleNamespace(sequences=generated, scores=tuple(scores))
+    if return_dict_in_generate:
+        return SimpleNamespace(sequences=generated, scores=tuple(scores))
+    return generated  # plain tensor, matching HF generate's default contract
 
 
 # --------------------------------------------------------------------------- #
