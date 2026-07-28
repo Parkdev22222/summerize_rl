@@ -75,7 +75,7 @@ def array_to_str(arr):
 
 def get_self_critical_reward(greedy_res, data_gts, gen_result, tokenizer, RougeL_reward_weight, Rouge1_reward_weight,
                              Rouge2_reward_weight, factkb_weight, logger, batch_input,
-                             batch_triplets=None, triplet_coverage_weight=0.0, hallu_weight=0.0,
+                             batch_triplets=None, triplet_coverage_weight=0.0,
                              judge_weight=0.0, judge=None, batch_keyfacts=None):
 
     batch_size = len(data_gts)  # 2
@@ -144,7 +144,7 @@ def get_self_critical_reward(greedy_res, data_gts, gen_result, tokenizer, RougeL
     
     # 初始化一个列表来存储每对序列的RougeLsum、Rouge1、Rouge2
     scores, Rouge1_scores, Rouge2_scores, Factkb_scores = [], [], [], []
-    TripCov_scores, Hallu_scores, Judge_scores = [], [], []
+    TripCov_scores, Judge_scores = [], []
     evaluator = Evaluator()
 
     # Only compute (and pay for) a metric when its weight is on. FactKB needs a
@@ -154,8 +154,6 @@ def get_self_critical_reward(greedy_res, data_gts, gen_result, tokenizer, RougeL
         metrics.append("factkb")
     if triplet_coverage_weight > 0:
         metrics.append("triplet_coverage")
-    if hallu_weight > 0:
-        metrics.append("hallu")
     if judge_weight > 0 and judge is not None:
         metrics.append("judge")
 
@@ -171,7 +169,6 @@ def get_self_critical_reward(greedy_res, data_gts, gen_result, tokenizer, RougeL
         Rouge2_scores.append(result_dict['rouge2_fmeasure'])
         Factkb_scores.append(result_dict.get('factkb', 0.0))
         TripCov_scores.append(result_dict.get('triplet_coverage', 0.0))
-        Hallu_scores.append(result_dict.get('hallu', 0.0))
         Judge_scores.append(result_dict.get('judge', 0.0))
 
     # for k, v in result_dict.items():
@@ -180,7 +177,7 @@ def get_self_critical_reward(greedy_res, data_gts, gen_result, tokenizer, RougeL
     #     result_dict[k] = v
 
     scores, Rouge1_scores, Rouge2_scores, Factkb_scores = np.array(scores), np.array(Rouge1_scores), np.array(Rouge2_scores), np.array(Factkb_scores)
-    TripCov_scores, Hallu_scores, Judge_scores = np.array(TripCov_scores), np.array(Hallu_scores), np.array(Judge_scores)
+    TripCov_scores, Judge_scores = np.array(TripCov_scores), np.array(Judge_scores)
 
     # 打印第一个样本的 topk 和 greedy结果看看
     topk_scores, topk_Rouge1_scores, topk_Rouge2_scores, topk_factkb_scores = [], [], [], []
@@ -225,14 +222,13 @@ def get_self_critical_reward(greedy_res, data_gts, gen_result, tokenizer, RougeL
     reward_info = {
         "rougeL": float(np.mean(scores[:_gs])) if _gs else 0.0,
         "triplet_coverage": float(np.mean(TripCov_scores[:_gs])) if TripCov_scores.size else 0.0,
-        "hallu": float(np.mean(Hallu_scores[:_gs])) if Hallu_scores.size else 0.0,
         "judge": float(np.mean(Judge_scores[:_gs])) if Judge_scores.size else 0.0,
     }
 
     # TODO 和self-critical的reward计算方式一致
     scores = RougeL_reward_weight * scores + Rouge1_reward_weight * Rouge1_scores + Rouge2_reward_weight * Rouge2_scores + factkb_weight * Factkb_scores
-    # ported reference-free reward terms: triplet-coverage & judge add, hallucination penalty subtracts
-    scores = scores + triplet_coverage_weight * TripCov_scores - hallu_weight * Hallu_scores + judge_weight * Judge_scores
+    # ported reference-free reward terms: triplet-coverage & judge add
+    scores = scores + triplet_coverage_weight * TripCov_scores + judge_weight * Judge_scores
     reward_info["weighted_mean"] = float(np.mean(scores[:gen_result_size]))
     scores = scores[:gen_result_size].reshape(batch_size, seq_per_img) - scores[-batch_size:][:, np.newaxis]
     
@@ -484,8 +480,6 @@ if __name__ == "__main__":
     # ported reference-free rewards (from summarize_rl); default 0.0 => unchanged behavior
     parser.add_argument('--triplet_coverage_weight', type=float, default=0.0,
                         help='weight of KB-triplet entity-coverage reward (needs data triplets)')
-    parser.add_argument('--hallu_weight', type=float, default=0.0,
-                        help='weight of ungrounded-fact (hallucination) PENALTY, subtracted')
     parser.add_argument('--judge_weight', type=float, default=0.0,
                         help='weight of Gemini LLM-as-judge accuracy reward (needs GEMINI_API_KEY)')
     parser.add_argument('--judge_max_new_tokens', type=int, default=48,
@@ -845,7 +839,6 @@ if __name__ == "__main__":
                                                     logger, batch_input,
                                                     batch_triplets=batch_triplets,
                                                     triplet_coverage_weight=args.triplet_coverage_weight,
-                                                    hallu_weight=args.hallu_weight,
                                                     judge_weight=args.judge_weight, judge=judge_model,
                                                     batch_keyfacts=batch_keyfacts)
                     

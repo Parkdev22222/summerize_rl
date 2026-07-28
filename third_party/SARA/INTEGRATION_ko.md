@@ -8,8 +8,10 @@ SARA가 우리 레포의 한국어 데이터로 학습·테스트할 수 있게 
 | 보상 | argparse | 방향 | 입력 |
 |---|---|---|---|
 | Triplet 커버리지 | `--triplet_coverage_weight` | + | 데이터의 `triplets`([head,rel,tail]) |
-| Hallucination 페널티 | `--hallu_weight` | − (감산) | 요약 vs 원문(부대·수치 정규식) |
 | LLM-as-judge (로컬 EXAONE) | `--judge_weight` | + | 원문 vs 요약, 항목별 sub-score(0~15) |
+
+> Hallucination(환각) 페널티는 보상함수에서 제거됨. (judge의 "비조작" 항목이 유사 역할을 겸함.
+> 헬퍼 `ungrounded_fact_penalty`/`calculate_ungrounded_fact_penalty`는 남아 있어 필요 시 재연결 가능.)
 
 - judge는 **이미 로드된 로컬 EXAONE 백본**으로 채점한다(API 키·네트워크 불필요).
   내부적으로 presumm/null 없이 `model.generate`를 호출 → **단일 브랜치 순수 디코딩**(정책 FC
