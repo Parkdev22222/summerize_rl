@@ -9,14 +9,20 @@ SARA가 우리 레포의 한국어 데이터로 학습·테스트할 수 있게 
 |---|---|---|---|
 | Triplet 커버리지 | `--triplet_coverage_weight` | + | 데이터의 `triplets`([head,rel,tail]) |
 | Hallucination 페널티 | `--hallu_weight` | − (감산) | 요약 vs 원문(부대·수치 정규식) |
-| LLM-as-judge (로컬 EXAONE) | `--judge_weight` | + | 원문 vs 요약, 0~100 정확도 |
+| LLM-as-judge (로컬 EXAONE) | `--judge_weight` | + | 원문 vs 요약, 항목별 sub-score(0~15) |
 
 - judge는 **이미 로드된 로컬 EXAONE 백본**으로 채점한다(API 키·네트워크 불필요).
   내부적으로 presumm/null 없이 `model.generate`를 호출 → **단일 브랜치 순수 디코딩**(정책 FC
-  미개입, 순수 base 판단)으로 짧게 생성(`--judge_max_new_tokens`, 기본 16)한 뒤 0~100 점수를
-  파싱한다. `torch.no_grad`로 호출해 RL grad에 영향 없음. (원문,요약) 캐시.
-- 비용: rollout마다 로컬 7.8B로 짧은 추가 생성 → **스텝당 느려짐**(API rate-limit·과금은 없음).
-  500 step 실험이면 `--judge_weight 0.2~0.3` 정도 소량 권장.
+  미개입, 순수 base 판단), `torch.no_grad`로 호출해 RL grad에 영향 없음. (원문,요약) 캐시.
+- **채점 방식 = 항목별 sub-score**(단일 0~100 절대점수는 한 값에 몰려 변별력이 약함).
+  세 기준을 각 0~5로 매겨 합산(0~15) 후 정규화:
+  1) 정확성(부대명·병력·장비수량·날짜/지명 정확), 2) 비조작(원문에 없는 것 안 지어냄),
+  3) 핵심포함(목표·편성·주요 장비·작전 국면·핵심 지형/ROE). 출력 형식
+  `정확성/비조작/핵심포함/[총점]`을 파싱(합 우선, 실패 시 [총점], 그다음 마지막 0~15 정수).
+- 비용: 출력이 길어져(`--judge_max_new_tokens` 기본 48) **스텝당 더 느려짐**(단일점수보다 2~3배).
+  20k step 등 긴 학습이면 `--judge_weight 0.2~0.3` 소량 권장. 첫 실패는 `[judge] ...` 로그로 노출.
+- 더 강한 옵션(정답 keyfacts 체크리스트 / 후보 vs greedy comparative)은 품질↑이나 느리고
+  배선이 커서 현재 미채택.
 - 세 가중치가 모두 0이면 SARA의 원래 보상(ROUGE+FactKB)과 **완전히 동일**하다.
 
 ## 우리 데이터로 학습·테스트

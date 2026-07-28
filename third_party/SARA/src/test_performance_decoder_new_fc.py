@@ -482,8 +482,8 @@ if __name__ == "__main__":
                         help='weight of ungrounded-fact (hallucination) PENALTY, subtracted')
     parser.add_argument('--judge_weight', type=float, default=0.0,
                         help='weight of Gemini LLM-as-judge accuracy reward (needs GEMINI_API_KEY)')
-    parser.add_argument('--judge_max_new_tokens', type=int, default=16,
-                        help='max new tokens the local EXAONE judge generates for its 0-100 score')
+    parser.add_argument('--judge_max_new_tokens', type=int, default=48,
+                        help='max new tokens the local EXAONE judge generates for its sub-score output')
     parser.add_argument('--max_grad_norm', type=float, default=1.0)
     parser.add_argument("--debug_flag", action="store_true", help='whether debug on a small portion of data')
     parser.add_argument("--debug_num", type=int, default=5)

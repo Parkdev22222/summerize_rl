@@ -173,6 +173,60 @@ def judge_prompt(source: str, summary: str) -> str:
     )
 
 
+def judge_prompt_subscore(source: str, summary: str) -> str:
+    """Per-criterion (0-5 each) military-summary judge prompt.
+
+    Scoring three axes separately (accuracy / non-fabrication / coverage) and
+    summing to 0-15 spreads the reward better than a single 0-100 guess (which
+    tends to anchor near one value). Criteria are tuned to this data (military
+    situation reports: unit names, troop counts, equipment quantities, dates/
+    places, operational phase). Reference-free (source + summary only).
+    """
+    return (
+        "당신은 군사 상황보고 요약을 채점하는 엄정한 심사관이다. [원문]을 근거로 [요약]을 "
+        "아래 세 기준에 대해 각각 0~5점(정수)으로 매기고, 마지막 줄에 세 점수의 합을 "
+        "[총점]으로 적어라.\n"
+        "- 정확성(0-5): 부대 명칭·병력 규모·장비 종류와 수량·날짜/시간·지명을 원문과 정확히 "
+        "일치시켰는가(틀리면 감점).\n"
+        "- 비조작(0-5): 원문에 없는 부대·수치·장비·사건을 지어내지 않았는가(지어내면 감점).\n"
+        "- 핵심포함(0-5): 양측의 목표·병력 편성·주요 장비·현재 작전 국면·핵심 지형/교전규칙 등 "
+        "중요한 사실을 빠짐없이 담았는가.\n"
+        "아래 형식으로만 출력하라(다른 말 금지):\n"
+        "정확성: <0-5>\n비조작: <0-5>\n핵심포함: <0-5>\n[총점]: <0-15>\n\n"
+        f"[원문]\n{source}\n\n[요약]\n{summary}\n\n채점:\n"
+    )
+
+
+_SUB_LABELS = ("정확성", "비조작", "핵심포함")
+
+
+def _parse_subscore(text: str | None) -> float | None:
+    """Parse the 0-15 sub-score judge output -> [0,1], or None if unreadable.
+
+    Priority: (1) sum of the three labeled 0-5 sub-scores; (2) the ``[총점]``
+    number (0-15); (3) the last 0-15 integer anywhere. More robust and
+    scale-explicit than :func:`_parse_score`.
+    """
+    t = text or ""
+    subs = []
+    for label in _SUB_LABELS:
+        m = re.search(label + r"\s*[:：]?\s*([0-5])", t)
+        if m:
+            subs.append(int(m.group(1)))
+    if len(subs) == 3:
+        return sum(subs) / 15.0
+    m = re.search(r"총점\s*\]?\s*[:：]?\s*(\d{1,2})", t)
+    if m:
+        v = int(m.group(1))
+        if 0 <= v <= 15:
+            return v / 15.0
+    nums = [int(x) for x in re.findall(r"\d{1,2}", t)]
+    nums = [n for n in nums if 0 <= n <= 15]
+    if nums:
+        return nums[-1] / 15.0
+    return None
+
+
 def make_gemini(api_key: str, model_name: str, temperature: float = 0.0):
     """Return call(prompt)->str using whichever google SDK is installed.
 
@@ -284,7 +338,7 @@ class BackboneJudge:
             print("[judge] " + msg)
 
     def _prompt_text(self, source: str, summary: str) -> str:
-        prompt = judge_prompt(source, summary)
+        prompt = judge_prompt_subscore(source, summary)
         # Prefer the model's chat template (EXAONE is instruction-tuned).
         try:
             return self.tokenizer.apply_chat_template(
@@ -325,7 +379,7 @@ class BackboneJudge:
             self.failures += 1
             self._warn("backbone judge failed (returning 0.0): {}: {}".format(type(e).__name__, e))
             return 0.0
-        val = _parse_score(text)
+        val = _parse_subscore(text)
         if val is None:
             self.failures += 1
             self._warn("no 0-100 score parsed (returning 0.0). raw={!r}".format((text or "")[:160]))

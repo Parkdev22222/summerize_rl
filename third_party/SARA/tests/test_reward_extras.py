@@ -71,6 +71,22 @@ def test_parse_score_none_cases():
     assert R._parse_score("999") is None  # out of 0..100 range
 
 
+def test_parse_subscore_sums_three_axes():
+    assert abs(R._parse_subscore("정확성: 4\n비조작: 5\n핵심포함: 3\n[총점]: 12") - 12 / 15) < 1e-9
+    # sum of the three axes wins even if the model's [총점] arithmetic is wrong
+    assert abs(R._parse_subscore("정확성: 5\n비조작: 5\n핵심포함: 5\n[총점]: 9") - 15 / 15) < 1e-9
+
+
+def test_parse_subscore_total_fallback():
+    # no per-axis labels -> use the [총점] number
+    assert abs(R._parse_subscore("총점: 9") - 9 / 15) < 1e-9
+
+
+def test_parse_subscore_none_cases():
+    assert R._parse_subscore("") is None
+    assert R._parse_subscore("설명만 있고 숫자 없음") is None
+
+
 def test_gemini_judge_with_stub_call():
     judge = R.GeminiJudge(lambda prompt: "이 요약의 점수는 85점입니다.")
     assert judge.score("원문", "요약") == 0.85

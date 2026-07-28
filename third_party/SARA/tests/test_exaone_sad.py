@@ -208,12 +208,12 @@ def test_backbone_judge_scores_via_generate():
             return SimpleNamespace(input_ids=ids, attention_mask=torch.ones_like(ids))
 
         def decode(self, ids, skip_special_tokens=True):
-            return "이 요약의 정확도 점수는 85점"
+            return "정확성: 4\n비조작: 5\n핵심포함: 3\n[총점]: 12"
         # no apply_chat_template -> BackboneJudge falls back to the raw prompt
 
-    judge = BackboneJudge(model, FakeTok(), device=torch.device("cpu"), max_new_tokens=4)
+    judge = BackboneJudge(model, FakeTok(), device=torch.device("cpu"), max_new_tokens=48)
     s = judge.score("원문 텍스트", "요약 텍스트")
-    assert abs(s - 0.85) < 1e-6, "expected 0.85 parsed from the judge output, got {}".format(s)
+    assert abs(s - 12 / 15) < 1e-6, "expected 12/15 parsed from sub-scores, got {}".format(s)
     # cached: a second identical call must not re-run generation
     assert judge.score("원문 텍스트", "요약 텍스트") == s
     assert judge.calls == 1
