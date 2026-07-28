@@ -267,6 +267,14 @@ class GeminiJudge:
     def __init__(self, judge_call):
         self.judge_call = judge_call
         self._cache: dict[tuple[str, str], float] = {}
+        self._warned = False  # only surface the first failure, to avoid log spam
+        self.calls = 0
+        self.failures = 0
+
+    def _warn(self, msg: str) -> None:
+        if not self._warned:
+            self._warned = True
+            print("[judge] " + msg)
 
     def score(self, source: str, summary: str) -> float:
         if self.judge_call is None:
@@ -274,11 +282,18 @@ class GeminiJudge:
         key = (source, summary)
         if key in self._cache:
             return self._cache[key]
+        self.calls += 1
         try:
             text = self.judge_call(judge_prompt(source, summary))
-        except Exception:  # network / rate-limit / SDK error -> skip this rollout
+        except Exception as e:  # network / rate-limit / SDK / auth error
+            self.failures += 1
+            self._warn("Gemini call failed (returning 0.0): {}: {}".format(type(e).__name__, e))
             return 0.0
         val = _parse_score(text)
-        val = 0.0 if val is None else float(val)
+        if val is None:  # response had no 0-100 integer to read
+            self.failures += 1
+            self._warn("no 0-100 score parsed (returning 0.0). raw={!r}".format((text or "")[:160]))
+            val = 0.0
+        val = float(val)
         self._cache[key] = val
         return val

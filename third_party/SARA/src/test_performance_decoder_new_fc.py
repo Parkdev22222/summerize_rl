@@ -764,12 +764,21 @@ if __name__ == "__main__":
         judge_model = None
         if args.judge_weight > 0:
             api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-            if api_key:
-                from reward_extras import make_gemini, GeminiJudge
-                judge_model = GeminiJudge(make_gemini(api_key, args.judge_gemini_model))
-                logger.info("LLM-as-judge enabled via Gemini model %s", args.judge_gemini_model)
-            else:
+            if not api_key:
                 logger.info("judge_weight>0 but GEMINI_API_KEY/GOOGLE_API_KEY unset -> judge disabled")
+                print("[judge] DISABLED: judge_weight>0 but no GEMINI_API_KEY/GOOGLE_API_KEY set")
+            else:
+                try:
+                    from reward_extras import make_gemini, GeminiJudge
+                    judge_model = GeminiJudge(make_gemini(api_key, args.judge_gemini_model))
+                    logger.info("LLM-as-judge enabled via Gemini model %s", args.judge_gemini_model)
+                    print("[judge] ENABLED via Gemini model {}".format(args.judge_gemini_model))
+                except Exception as e:  # noqa: BLE001  (missing SDK, bad client, etc.)
+                    judge_model = None
+                    logger.info("judge disabled (%s)", e)
+                    print("[judge] DISABLED ({}). Install the SDK: pip install google-genai".format(e))
+        elif args.judge_weight == 0:
+            print("[judge] off (judge_weight=0). Set --judge_weight > 0 and GEMINI_API_KEY to enable.")
 
         for epoch_i in range(args.epoch_num):
             # predictions, references, documents = [], [], []
