@@ -212,7 +212,8 @@ def test_backbone_judge_scores_via_generate():
         # no apply_chat_template -> BackboneJudge falls back to the raw prompt
 
     judge = BackboneJudge(model, FakeTok(), device=torch.device("cpu"), max_new_tokens=48)
-    s = judge.score("원문 텍스트", "요약 텍스트")
+    # pass gold keyfacts (checklist path) — must run and parse the sub-scores.
+    s = judge.score("원문 텍스트", "요약 텍스트", keyfacts=["블루포스 1,000명", "국경 통제 목표"])
     assert abs(s - 12 / 15) < 1e-6, "expected 12/15 parsed from sub-scores, got {}".format(s)
     # cached: a second identical call must not re-run generation
     assert judge.score("원문 텍스트", "요약 텍스트") == s

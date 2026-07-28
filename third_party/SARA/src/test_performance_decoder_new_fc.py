@@ -76,7 +76,7 @@ def array_to_str(arr):
 def get_self_critical_reward(greedy_res, data_gts, gen_result, tokenizer, RougeL_reward_weight, Rouge1_reward_weight,
                              Rouge2_reward_weight, factkb_weight, logger, batch_input,
                              batch_triplets=None, triplet_coverage_weight=0.0, hallu_weight=0.0,
-                             judge_weight=0.0, judge=None):
+                             judge_weight=0.0, judge=None, batch_keyfacts=None):
 
     batch_size = len(data_gts)  # 2
     gen_result_size = gen_result.shape[0]  # 4
@@ -115,6 +115,12 @@ def get_self_critical_reward(greedy_res, data_gts, gen_result, tokenizer, RougeL
         batch_triplets = [None] * batch_size
     triplets_ = [batch_triplets[i // seq_per_img] for i in range(gen_result_size)]
     triplets_.extend(batch_triplets[i] for i in range(batch_size))
+
+    # Align per-input gold keyfacts the same way (rollouts then greedy) for the judge.
+    if batch_keyfacts is None:
+        batch_keyfacts = [None] * batch_size
+    keyfacts_ = [batch_keyfacts[i // seq_per_img] for i in range(gen_result_size)]
+    keyfacts_.extend(batch_keyfacts[i] for i in range(batch_size))
     
     res_for_evaluate, gt_for_evaluate = [], []
     
@@ -154,12 +160,12 @@ def get_self_critical_reward(greedy_res, data_gts, gen_result, tokenizer, RougeL
         metrics.append("judge")
 
     # 逐条计算rougeLsum_fmeasure分数
-    for pred, gt, document, trip in zip(res_for_evaluate, gt_for_evaluate, documents_, triplets_):
+    for pred, gt, document, trip, kf in zip(res_for_evaluate, gt_for_evaluate, documents_, triplets_, keyfacts_):
         pred = [pred]
         gt = [gt]
         document = [document]
         result_dict = evaluator.evaluate(pred, gt, document, metrics=metrics,
-                                         triplets=[trip], judge=judge)
+                                         triplets=[trip], judge=judge, keyfacts=[kf])
         scores.append(result_dict['rougeLsum_fmeasure'])
         Rouge1_scores.append(result_dict['rouge1_fmeasure'])
         Rouge2_scores.append(result_dict['rouge2_fmeasure'])
@@ -784,6 +790,7 @@ if __name__ == "__main__":
 
                 batch_input, batch_reference, batch_presumm = [row[0] for row in batch], [row[1] for row in batch], [row[2] for row in batch]
                 batch_triplets = [row[3] if len(row) > 3 else None for row in batch]  # KB triplets for triplet-coverage reward
+                batch_keyfacts = [row[2] if len(row) > 2 else None for row in batch]  # gold keyfacts (raw) for the judge checklist
                 tokenized_input = tokenizer(batch_input, return_tensors="pt", max_length=1800, padding=True, truncation=True)
                 if args.context_aware_decoding_alpha >=0.: #full and salience and prompt
                     # print('full+salience-prompt generation')
@@ -839,7 +846,8 @@ if __name__ == "__main__":
                                                     batch_triplets=batch_triplets,
                                                     triplet_coverage_weight=args.triplet_coverage_weight,
                                                     hallu_weight=args.hallu_weight,
-                                                    judge_weight=args.judge_weight, judge=judge_model)
+                                                    judge_weight=args.judge_weight, judge=judge_model,
+                                                    batch_keyfacts=batch_keyfacts)
                     
                     reward = torch.from_numpy(reward).to(sample_logprobs)   
                     rl_crit = RewardCriterion()

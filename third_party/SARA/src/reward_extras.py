@@ -173,15 +173,52 @@ def judge_prompt(source: str, summary: str) -> str:
     )
 
 
-def judge_prompt_subscore(source: str, summary: str) -> str:
+def _keyfact_lines(keyfacts, max_keyfacts: int = 8) -> list[str]:
+    """Normalize keyfacts (list[str] or newline-joined str) to <= N clean lines."""
+    if not keyfacts:
+        return []
+    if isinstance(keyfacts, str):
+        items = keyfacts.split("\n")
+    else:
+        items = list(keyfacts)
+    out = []
+    for it in items:
+        s = str(it).strip().lstrip("-•· ").strip()
+        if s:
+            out.append(s)
+        if len(out) >= max_keyfacts:
+            break
+    return out
+
+
+def judge_prompt_subscore(source: str, summary: str, keyfacts=None) -> str:
     """Per-criterion (0-5 each) military-summary judge prompt.
 
     Scoring three axes separately (accuracy / non-fabrication / coverage) and
     summing to 0-15 spreads the reward better than a single 0-100 guess (which
     tends to anchor near one value). Criteria are tuned to this data (military
     situation reports: unit names, troop counts, equipment quantities, dates/
-    places, operational phase). Reference-free (source + summary only).
+    places, operational phase).
+
+    When ``keyfacts`` are supplied (this repo's gold key facts), they are shown
+    as a checklist and criterion 3 becomes "how many of these are correctly &
+    faithfully reflected" — a semantic check (paraphrase counts) that the lexical
+    coverage reward misses. Capped to the top few so the prompt stays short.
     """
+    kf = _keyfact_lines(keyfacts)
+    if kf:
+        checklist = "\n".join("  {}. {}".format(i + 1, s) for i, s in enumerate(kf))
+        kf_block = "[핵심 사실]\n{}\n\n".format(checklist)
+        crit3 = (
+            "- 핵심포함(0-5): 위 [핵심 사실]들을 (표현이 달라도) 의미상 빠짐없이 정확히 "
+            "반영했는가(많이 반영·정확할수록 5, 빠뜨리거나 왜곡할수록 0).\n"
+        )
+    else:
+        kf_block = ""
+        crit3 = (
+            "- 핵심포함(0-5): 양측의 목표·병력 편성·주요 장비·현재 작전 국면·핵심 지형/교전규칙 "
+            "등 중요한 사실을 빠짐없이 담았는가.\n"
+        )
     return (
         "당신은 군사 상황보고 요약을 채점하는 엄정한 심사관이다. [원문]을 근거로 [요약]을 "
         "아래 세 기준에 대해 각각 0~5점(정수)으로 매기고, 마지막 줄에 세 점수의 합을 "
@@ -189,11 +226,10 @@ def judge_prompt_subscore(source: str, summary: str) -> str:
         "- 정확성(0-5): 부대 명칭·병력 규모·장비 종류와 수량·날짜/시간·지명을 원문과 정확히 "
         "일치시켰는가(틀리면 감점).\n"
         "- 비조작(0-5): 원문에 없는 부대·수치·장비·사건을 지어내지 않았는가(지어내면 감점).\n"
-        "- 핵심포함(0-5): 양측의 목표·병력 편성·주요 장비·현재 작전 국면·핵심 지형/교전규칙 등 "
-        "중요한 사실을 빠짐없이 담았는가.\n"
+        + crit3 +
         "아래 형식으로만 출력하라(다른 말 금지):\n"
         "정확성: <0-5>\n비조작: <0-5>\n핵심포함: <0-5>\n[총점]: <0-15>\n\n"
-        f"[원문]\n{source}\n\n[요약]\n{summary}\n\n채점:\n"
+        f"[원문]\n{source}\n\n{kf_block}[요약]\n{summary}\n\n채점:\n"
     )
 
 
@@ -337,8 +373,8 @@ class BackboneJudge:
             self._warned = True
             print("[judge] " + msg)
 
-    def _prompt_text(self, source: str, summary: str) -> str:
-        prompt = judge_prompt_subscore(source, summary)
+    def _prompt_text(self, source: str, summary: str, keyfacts=None) -> str:
+        prompt = judge_prompt_subscore(source, summary, keyfacts)
         # Prefer the model's chat template (EXAONE is instruction-tuned).
         try:
             return self.tokenizer.apply_chat_template(
@@ -348,7 +384,7 @@ class BackboneJudge:
         except Exception:  # no chat template -> raw prompt
             return prompt
 
-    def score(self, source: str, summary: str) -> float:
+    def score(self, source: str, summary: str, keyfacts=None) -> float:
         key = (source, summary)
         if key in self._cache:
             return self._cache[key]
@@ -358,7 +394,7 @@ class BackboneJudge:
             from types import SimpleNamespace
 
             tok = self.tokenizer
-            enc = tok(self._prompt_text(source, summary), return_tensors="pt",
+            enc = tok(self._prompt_text(source, summary, keyfacts), return_tensors="pt",
                       truncation=True, max_length=1800)
             dev = self.device or next(self.model.parameters()).device
             input_ids = enc.input_ids.to(dev)
@@ -410,7 +446,9 @@ class GeminiJudge:
             self._warned = True
             print("[judge] " + msg)
 
-    def score(self, source: str, summary: str) -> float:
+    def score(self, source: str, summary: str, keyfacts=None) -> float:
+        # keyfacts accepted for a uniform judge interface; legacy Gemini path
+        # keeps the absolute-score prompt and ignores them.
         if self.judge_call is None:
             return 0.0
         key = (source, summary)

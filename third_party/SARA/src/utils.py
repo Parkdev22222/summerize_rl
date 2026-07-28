@@ -18,7 +18,7 @@ class Evaluator:
         self.metrics = metrics
     
     def evaluate(self, predictions, references, documents, metrics=["rouge", "bertscore", "factkb"],
-                 triplets=None, judge=None):
+                 triplets=None, judge=None, keyfacts=None):
         result_dict = OrderedDict()
         if "rouge" in metrics:
             rouge_dict = self.calculate_rouge(predictions, references)
@@ -40,7 +40,7 @@ class Evaluator:
         if "hallu" in metrics:
             result_dict["hallu"] = self.calculate_ungrounded_fact_penalty(predictions, documents)
         if "judge" in metrics:
-            result_dict["judge"] = self.calculate_judge(predictions, documents, judge)
+            result_dict["judge"] = self.calculate_judge(predictions, documents, judge, keyfacts)
 
         # for k, v in result_dict.items():
         #     print(f"{k} -> {v*100:.2f}")
@@ -102,13 +102,18 @@ class Evaluator:
         res = [ungrounded_fact_penalty(predictions[i], documents[i]) for i in range(len(predictions))]
         return float(np.mean(res)) if res else 0.0
 
-    def calculate_judge(self, predictions, documents, judge=None):
+    def calculate_judge(self, predictions, documents, judge=None, keyfacts=None):
         """Mean LLM-as-judge accuracy in [0,1] (source vs summary). ``judge`` is
-        a GeminiJudge (or any object with ``score(source, summary)->float``);
-        None -> 0.0 (judge disabled)."""
+        a BackboneJudge (``score(source, summary, keyfacts=None)->float``);
+        ``keyfacts[i]`` (this repo's gold key facts) is passed as a checklist when
+        available. None -> 0.0 (judge disabled)."""
         if judge is None:
             return 0.0
-        res = [judge.score(documents[i], predictions[i]) for i in range(len(predictions))]
+        res = [
+            judge.score(documents[i], predictions[i],
+                        keyfacts[i] if keyfacts else None)
+            for i in range(len(predictions))
+        ]
         return float(np.mean(res)) if res else 0.0
 
 

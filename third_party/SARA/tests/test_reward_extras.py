@@ -87,6 +87,23 @@ def test_parse_subscore_none_cases():
     assert R._parse_subscore("설명만 있고 숫자 없음") is None
 
 
+def test_judge_prompt_keyfacts_checklist():
+    # string (newline-joined) keyfacts -> numbered checklist, capped at 8
+    kf = "\n".join("사실 %d" % i for i in range(1, 12))
+    p = R.judge_prompt_subscore("원문", "요약", keyfacts=kf)
+    assert "[핵심 사실]" in p
+    assert "1. 사실 1" in p and "8. 사실 8" in p
+    assert "9. 사실 9" not in p  # capped at 8
+    # no keyfacts -> no checklist block, generic criterion 3
+    p2 = R.judge_prompt_subscore("원문", "요약")
+    assert "[핵심 사실]" not in p2
+
+
+def test_judge_prompt_keyfacts_list_form():
+    p = R.judge_prompt_subscore("원문", "요약", keyfacts=["갈도비아는 국경 통제가 목표", "블루포스 1,000명"])
+    assert "블루포스 1,000명" in p and "[핵심 사실]" in p
+
+
 def test_gemini_judge_with_stub_call():
     judge = R.GeminiJudge(lambda prompt: "이 요약의 점수는 85점입니다.")
     assert judge.score("원문", "요약") == 0.85
