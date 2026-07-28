@@ -591,7 +591,7 @@ if __name__ == "__main__":
     if args.my_fc_fp32:
         model = convert_my_layers_to_fp32(model)
 
-    config = AutoConfig.from_pretrained(args.model_name_or_path)
+    config = AutoConfig.from_pretrained(args.model_name_or_path, trust_remote_code=True)
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     
     # 冻结除了最后两个全连接层之外的所有参数
