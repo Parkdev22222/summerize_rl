@@ -1,0 +1,39 @@
+Third-party vendored code
+==========================
+
+This directory (third_party/SARA/) contains a vendored copy of the SARA project:
+
+    SARA: Salience-Aware Reinforced Adaptive Decoding
+    Upstream: https://github.com/wkw1259/SARA
+    Builds upon: https://github.com/zhichaoxu-shufe/context-aware-decoding-qfs
+    Vendored on: 2026-07-28
+
+The upstream repository ships no LICENSE file. It is vendored here unmodified
+except for the additions listed below, and is kept isolated under third_party/
+so its provenance is explicit. If you intend to redistribute this repository,
+confirm the licensing status of the upstream code first.
+
+Local additions/modifications (by this repo, on top of upstream SARA)
+--------------------------------------------------------------------
+Purpose: port three reference-free reward components from the summarize_rl
+project into SARA's self-critical reward, and let SARA train/test on the
+summarize_rl Korean corpus (data/scenarios_ko.jsonl).
+
+- src/reward_extras.py            NEW. Ported reward helpers (triplet coverage,
+                                  ungrounded-fact/hallucination penalty, Gemini
+                                  LLM-as-judge) + the summarize_rl data loader.
+                                  Ported from summarize_rl/{rewards,judge}.py,
+                                  branches.py, examples/eval_gemini.py.
+- src/utils.py                    Evaluator gains calculate_triplet_coverage /
+                                  calculate_ungrounded_fact_penalty /
+                                  calculate_judge; load_dataset_ours +
+                                  "summarize_rl_ko" branch in load_dataset and
+                                  the input decoders.
+- src/test_performance_decoder_new_fc.py
+                                  get_self_critical_reward gains the three
+                                  weighted terms; new argparse weights
+                                  (--triplet_coverage_weight, --hallu_weight,
+                                  --judge_weight, --judge_gemini_model); KB
+                                  triplets threaded from data into the reward.
+- tests/test_reward_extras.py     NEW. Unit tests for the above (stdlib only).
+- INTEGRATION_ko.md               NEW. Korean usage notes + known limitations.
