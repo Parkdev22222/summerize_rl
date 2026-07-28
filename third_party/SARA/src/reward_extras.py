@@ -255,6 +255,86 @@ def load_ours_dataset(data_dir: str | None = None):
     return train, validation, test
 
 
+class BackboneJudge:
+    """LLM-as-judge that scores with the LOCAL backbone (e.g. EXAONE 3.5).
+
+    Reuses the already-loaded model — no API key, no network. It calls
+    ``model.generate`` WITHOUT presumm/null inputs, which the SAD generate
+    treats as plain single-branch decoding (the FC policy is not involved), so
+    the score reflects the frozen base model's judgment. Generation runs under
+    ``torch.no_grad`` so it never touches the RL gradient graph.
+
+    ``score(source, summary) -> float`` in [0,1]; results are cached per
+    (source, summary).
+    """
+
+    def __init__(self, model, tokenizer, device=None, max_new_tokens=16):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.device = device
+        self.max_new_tokens = max_new_tokens
+        self._cache: dict[tuple[str, str], float] = {}
+        self._warned = False
+        self.calls = 0
+        self.failures = 0
+
+    def _warn(self, msg: str) -> None:
+        if not self._warned:
+            self._warned = True
+            print("[judge] " + msg)
+
+    def _prompt_text(self, source: str, summary: str) -> str:
+        prompt = judge_prompt(source, summary)
+        # Prefer the model's chat template (EXAONE is instruction-tuned).
+        try:
+            return self.tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                add_generation_prompt=True, tokenize=False,
+            )
+        except Exception:  # no chat template -> raw prompt
+            return prompt
+
+    def score(self, source: str, summary: str) -> float:
+        key = (source, summary)
+        if key in self._cache:
+            return self._cache[key]
+        self.calls += 1
+        try:
+            import torch
+            from types import SimpleNamespace
+
+            tok = self.tokenizer
+            enc = tok(self._prompt_text(source, summary), return_tensors="pt",
+                      truncation=True, max_length=1800)
+            dev = self.device or next(self.model.parameters()).device
+            input_ids = enc.input_ids.to(dev)
+            attn = enc.attention_mask.to(dev)
+            gc = SimpleNamespace(
+                do_sample=False, top_k=0, top_p=1.0, temperature=1.0,
+                min_new_tokens=1, max_new_tokens=self.max_new_tokens,
+                eos_token_id=tok.eos_token_id, pad_token_id=tok.pad_token_id,
+            )
+            with torch.no_grad():
+                out = self.model.generate(
+                    input_ids=input_ids, attention_mask=attn,
+                    generation_config=gc,
+                )
+            gen = out.sequences[:, input_ids.shape[1]:]
+            text = tok.decode(gen[0], skip_special_tokens=True)
+        except Exception as e:  # noqa: BLE001
+            self.failures += 1
+            self._warn("backbone judge failed (returning 0.0): {}: {}".format(type(e).__name__, e))
+            return 0.0
+        val = _parse_score(text)
+        if val is None:
+            self.failures += 1
+            self._warn("no 0-100 score parsed (returning 0.0). raw={!r}".format((text or "")[:160]))
+            val = 0.0
+        val = float(val)
+        self._cache[key] = val
+        return val
+
+
 class GeminiJudge:
     """LLM-as-judge backed by a ``call(prompt)->str`` function (Gemini).
 

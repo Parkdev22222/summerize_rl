@@ -483,7 +483,9 @@ if __name__ == "__main__":
     parser.add_argument('--judge_weight', type=float, default=0.0,
                         help='weight of Gemini LLM-as-judge accuracy reward (needs GEMINI_API_KEY)')
     parser.add_argument('--judge_gemini_model', type=str, default='gemini-2.5-flash',
-                        help='Gemini model id used by the LLM-as-judge reward')
+                        help='(unused) legacy Gemini judge model id')
+    parser.add_argument('--judge_max_new_tokens', type=int, default=16,
+                        help='max new tokens the local EXAONE judge generates for its 0-100 score')
     parser.add_argument('--max_grad_norm', type=float, default=1.0)
     parser.add_argument("--debug_flag", action="store_true", help='whether debug on a small portion of data')
     parser.add_argument("--debug_num", type=int, default=5)
@@ -760,25 +762,20 @@ if __name__ == "__main__":
                 logger.info("TensorBoard disabled (%s) — run `pip install tensorboard`", e)
                 print("[TensorBoard] disabled ({}). Install it: pip install tensorboard".format(e))
 
-        # Build the Gemini LLM-as-judge once (reused + cached across the run).
+        # LLM-as-judge using the LOCAL EXAONE backbone (no API key / network).
         judge_model = None
         if args.judge_weight > 0:
-            api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-            if not api_key:
-                logger.info("judge_weight>0 but GEMINI_API_KEY/GOOGLE_API_KEY unset -> judge disabled")
-                print("[judge] DISABLED: judge_weight>0 but no GEMINI_API_KEY/GOOGLE_API_KEY set")
-            else:
-                try:
-                    from reward_extras import make_gemini, GeminiJudge
-                    judge_model = GeminiJudge(make_gemini(api_key, args.judge_gemini_model))
-                    logger.info("LLM-as-judge enabled via Gemini model %s", args.judge_gemini_model)
-                    print("[judge] ENABLED via Gemini model {}".format(args.judge_gemini_model))
-                except Exception as e:  # noqa: BLE001  (missing SDK, bad client, etc.)
-                    judge_model = None
-                    logger.info("judge disabled (%s)", e)
-                    print("[judge] DISABLED ({}). Install the SDK: pip install google-genai".format(e))
-        elif args.judge_weight == 0:
-            print("[judge] off (judge_weight=0). Set --judge_weight > 0 and GEMINI_API_KEY to enable.")
+            try:
+                from reward_extras import BackboneJudge
+                judge_model = BackboneJudge(model, tokenizer, DEVICE, args.judge_max_new_tokens)
+                logger.info("LLM-as-judge enabled via local backbone (max_new_tokens=%d)", args.judge_max_new_tokens)
+                print("[judge] ENABLED via local EXAONE backbone (max_new_tokens={})".format(args.judge_max_new_tokens))
+            except Exception as e:  # noqa: BLE001
+                judge_model = None
+                logger.info("judge disabled (%s)", e)
+                print("[judge] DISABLED ({})".format(e))
+        else:
+            print("[judge] off (judge_weight=0). Set --judge_weight > 0 to enable the EXAONE judge.")
 
         for epoch_i in range(args.epoch_num):
             # predictions, references, documents = [], [], []

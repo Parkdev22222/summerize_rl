@@ -9,12 +9,14 @@ SARA가 우리 레포의 한국어 데이터로 학습·테스트할 수 있게 
 |---|---|---|---|
 | Triplet 커버리지 | `--triplet_coverage_weight` | + | 데이터의 `triplets`([head,rel,tail]) |
 | Hallucination 페널티 | `--hallu_weight` | − (감산) | 요약 vs 원문(부대·수치 정규식) |
-| LLM-as-judge (Gemini) | `--judge_weight` | + | 원문 vs 요약, 0~100 정확도 |
+| LLM-as-judge (로컬 EXAONE) | `--judge_weight` | + | 원문 vs 요약, 0~100 정확도 |
 
-- judge는 **Gemini API** 사용: `--judge_gemini_model`(기본 `gemini-2.5-flash`),
-  키는 `GEMINI_API_KEY`(또는 `GOOGLE_API_KEY`) 환경변수. 키가 없으면 자동 비활성(0.0).
-- judge는 (원문,요약) 캐시로 중복 호출을 줄이지만, RL 루프에서 rollout마다 API를
-  호출하므로 대규모 학습에는 비용·rate limit 부담이 있다. 실험적으로만 켤 것.
+- judge는 **이미 로드된 로컬 EXAONE 백본**으로 채점한다(API 키·네트워크 불필요).
+  내부적으로 presumm/null 없이 `model.generate`를 호출 → **단일 브랜치 순수 디코딩**(정책 FC
+  미개입, 순수 base 판단)으로 짧게 생성(`--judge_max_new_tokens`, 기본 16)한 뒤 0~100 점수를
+  파싱한다. `torch.no_grad`로 호출해 RL grad에 영향 없음. (원문,요약) 캐시.
+- 비용: rollout마다 로컬 7.8B로 짧은 추가 생성 → **스텝당 느려짐**(API rate-limit·과금은 없음).
+  500 step 실험이면 `--judge_weight 0.2~0.3` 정도 소량 권장.
 - 세 가중치가 모두 0이면 SARA의 원래 보상(ROUGE+FactKB)과 **완전히 동일**하다.
 
 ## 우리 데이터로 학습·테스트
@@ -27,13 +29,14 @@ SARA가 우리 레포의 한국어 데이터로 학습·테스트할 수 있게 
 예시(스모크):
 ```bash
 cd third_party/SARA/src
-GEMINI_API_KEY=... python test_performance_decoder_new_fc.py \
+python test_performance_decoder_new_fc.py \
     --do_train --dataset summarize_rl_ko \
-    --model_name_or_path <backbone> --loading_mode bf16 \
+    --model_name_or_path LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct --loading_mode bf16 \
     --num_return_sequences 2 --batch_size 2 --debug_flag --debug_num 2 \
     --triplet_coverage_weight 1.0 --hallu_weight 0.5 \
-    --judge_weight 0.0 --factkb_weight 0.0
+    --judge_weight 0.3 --factkb_weight 0.0
 ```
+judge를 켜면(`--judge_weight>0`) 시작 시 `[judge] ENABLED via local EXAONE backbone`이 뜬다.
 
 ## TensorBoard로 성능 보기
 SARA 원본엔 TensorBoard가 없어 추가했다. `--tensorboard_logdir <경로>`를 주면 매 학습 스텝마다

@@ -177,7 +177,40 @@ def test_sad_generate_grad_flows_to_fc():
     print("PASS test_sad_generate_grad_flows_to_fc")
 
 
+def test_backbone_judge_scores_via_generate():
+    """BackboneJudge should drive the model's plain generate + parse a 0-100 score."""
+    if not HAVE_TORCH:
+        print("SKIP test_backbone_judge_scores_via_generate (torch unavailable)")
+        return
+    from modeling_exaone_sad import add_sad_head
+    from reward_extras import BackboneJudge
+
+    model, cfg = _build_fake_causal_lm()
+    model = add_sad_head(model, cfg, fc_fp32=True)
+
+    class FakeTok:
+        eos_token_id = 1
+        pad_token_id = 0
+
+        def __call__(self, text, return_tensors=None, truncation=None, max_length=None):
+            ids = torch.randint(2, cfg.vocab_size, (1, 6))
+            return SimpleNamespace(input_ids=ids, attention_mask=torch.ones_like(ids))
+
+        def decode(self, ids, skip_special_tokens=True):
+            return "이 요약의 정확도 점수는 85점"
+        # no apply_chat_template -> BackboneJudge falls back to the raw prompt
+
+    judge = BackboneJudge(model, FakeTok(), device=torch.device("cpu"), max_new_tokens=4)
+    s = judge.score("원문 텍스트", "요약 텍스트")
+    assert abs(s - 0.85) < 1e-6, "expected 0.85 parsed from the judge output, got {}".format(s)
+    # cached: a second identical call must not re-run generation
+    assert judge.score("원문 텍스트", "요약 텍스트") == s
+    assert judge.calls == 1
+    print("PASS test_backbone_judge_scores_via_generate")
+
+
 if __name__ == "__main__":
     test_sad_head_forward_contract()
     test_sad_generate_contract()
     test_sad_generate_grad_flows_to_fc()
+    test_backbone_judge_scores_via_generate()
