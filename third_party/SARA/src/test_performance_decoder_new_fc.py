@@ -742,12 +742,17 @@ if __name__ == "__main__":
         _tb = args.tensorboard_logdir
         if _tb.lower() in ("none", "off", "false", "0"):
             logdir = None
+        elif _tb:
+            logdir = _tb
         else:
-            logdir = _tb or os.path.join("runs", args.id or "run")
+            # Default: third_party/SARA/runs/<id> (anchored to this file, NOT cwd),
+            # so `tensorboard --logdir third_party/SARA/runs` finds it from anywhere.
+            _here = os.path.dirname(os.path.abspath(__file__))
+            logdir = os.path.join(_here, "..", "runs", args.id or "run")
         if logdir is not None:
             try:
                 from torch.utils.tensorboard import SummaryWriter
-                writer = SummaryWriter(logdir)
+                writer = SummaryWriter(logdir, flush_secs=10)
                 abspath = os.path.abspath(logdir)
                 logger.info("TensorBoard logging to %s", abspath)
                 print("[TensorBoard] logging to {}  ->  tensorboard --logdir {}".format(abspath, abspath))
@@ -893,6 +898,7 @@ if __name__ == "__main__":
                         writer.add_scalar("train/loss", loss.item(), iteration)
                         for _k, _v in reward_info.items():
                             writer.add_scalar("reward/{}".format(_k), _v, iteration)
+                        writer.flush()  # make points visible immediately
 
                     train_loss = loss.item()
                     if math.isinf(train_loss):
