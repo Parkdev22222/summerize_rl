@@ -735,15 +735,25 @@ if __name__ == "__main__":
 
         logger.info("start training!")
 
-        # Optional TensorBoard writer (train/loss + reward/* per step).
+        # TensorBoard writer (train/loss + reward/* per step). On by default:
+        # if --tensorboard_logdir is empty we log to runs/<id>. Set it to "none"
+        # / "off" to disable.
         writer = None
-        if args.tensorboard_logdir:
+        _tb = args.tensorboard_logdir
+        if _tb.lower() in ("none", "off", "false", "0"):
+            logdir = None
+        else:
+            logdir = _tb or os.path.join("runs", args.id or "run")
+        if logdir is not None:
             try:
                 from torch.utils.tensorboard import SummaryWriter
-                writer = SummaryWriter(args.tensorboard_logdir)
-                logger.info("TensorBoard logging to %s", args.tensorboard_logdir)
+                writer = SummaryWriter(logdir)
+                abspath = os.path.abspath(logdir)
+                logger.info("TensorBoard logging to %s", abspath)
+                print("[TensorBoard] logging to {}  ->  tensorboard --logdir {}".format(abspath, abspath))
             except Exception as e:  # noqa: BLE001
-                logger.info("TensorBoard disabled (%s)", e)
+                logger.info("TensorBoard disabled (%s) — run `pip install tensorboard`", e)
+                print("[TensorBoard] disabled ({}). Install it: pip install tensorboard".format(e))
 
         # Build the Gemini LLM-as-judge once (reused + cached across the run).
         judge_model = None
