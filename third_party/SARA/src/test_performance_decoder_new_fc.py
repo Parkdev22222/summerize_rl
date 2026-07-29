@@ -516,12 +516,17 @@ if __name__ == "__main__":
     parser.add_argument("--debug_num", type=int, default=5)
     parser.add_argument("--use_log_softmax", action="store_true", help='whether to use log_softmax')
     # RL algorithm: SCST (default, greedy baseline + REINFORCE) or GRPO (group-relative
-    # advantage + PPO clipped surrogate + KL to the frozen base LM; single update per batch).
+    # advantage + PPO clipped surrogate + KL to the frozen base LM; multi-epoch with
+    # --grpo_mu>1 re-scores the rollout so the clip actually engages).
     parser.add_argument("--rl_algo", type=str, default="scst", choices=["scst", "grpo"],
                         help="RL objective: 'scst' (default) or 'grpo'.")
     parser.add_argument("--grpo_clip_eps", type=float, default=0.2, help="GRPO PPO clip epsilon.")
     parser.add_argument("--grpo_kl_beta", type=float, default=0.04, help="GRPO KL-to-reference coefficient.")
     parser.add_argument("--grpo_adv_eps", type=float, default=1e-4, help="GRPO group-std stabilizer.")
+    parser.add_argument("--grpo_mu", type=int, default=4,
+                        help="GRPO inner PPO epochs per rollout batch (μ). >1 activates the clip.")
+    parser.add_argument("--grpo_minibatch_size", type=int, default=0,
+                        help="GRPO rows per inner update (0 = full batch of N=bs*num_return).")
     parser.add_argument("--dropout_rate", type=float, default=0.0)
     parser.add_argument("--warmup_step", type=float, default=100)
     parser.add_argument("--warmup_train_step", type=float, default=2000)
@@ -869,7 +874,12 @@ if __name__ == "__main__":
                     
                     output = output_dict.sequences
                     gen_result, scores = output[:, tokenized_input.input_ids.shape[1]:], output_dict.scores   # scores 70 * [4 * 320000]
-                    scores = torch.stack(scores, dim=0).permute(1, 0, 2)  # [bs*num_return_sequences 生成的seq 50257]  
+                    scores = torch.stack(scores, dim=0).permute(1, 0, 2)  # [bs*num_return_sequences 生成的seq 50257]
+                    if args.rl_algo == "grpo":
+                        # GRPO re-scores the rollout with its own teacher-forced pass,
+                        # so the sampling-time autograd graph is unused — drop it to free
+                        # memory before the multi-epoch inner loop.
+                        scores = scores.detach()
                     if args.use_log_softmax:
                         sample_logprobs = F.log_softmax(scores, dim=-1)
                     else:
@@ -884,22 +894,61 @@ if __name__ == "__main__":
                                                     batch_keyfacts=batch_keyfacts,
                                                     algo=args.rl_algo, grpo_adv_eps=args.grpo_adv_eps)
 
+                    grpo_stepped = False
                     if args.rl_algo == "grpo":
                         from grpo_extras import GRPOLoss, reference_logprobs
-                        # per-token logprob of the sampled tokens under the current
-                        # policy (differentiable -> grad flows to the FC head).
-                        logp_all = F.log_softmax(scores, dim=-1)
-                        new_logp = logp_all.gather(2, gen_result.unsqueeze(2)).squeeze(2)  # [N, L]
-                        old_logp = new_logp.detach()                                        # μ=1: π_old == π_θ
+                        from modeling_exaone_sad import (sad_branch_features,
+                                                         sad_logprobs_from_features)
+                        # --- build once per batch (frozen backbone -> no_grad) -----------
+                        # Cache the 3 branches' per-position logits+hidden so every inner
+                        # PPO epoch only re-applies the (cheap) FC head to re-score.
+                        feats = sad_branch_features(
+                            model,
+                            tokenized_input.input_ids.to(DEVICE), tokenized_input.attention_mask.to(DEVICE),
+                            tokenized_presumm.input_ids.to(DEVICE), tokenized_presumm.attention_mask.to(DEVICE),
+                            tokenized_null_input.input_ids.to(DEVICE), None,  # null used ones-mask at generation
+                            gen_result)
                         ref_logp = reference_logprobs(model, tokenized_input.input_ids.to(DEVICE),
                                                       tokenized_input.attention_mask.to(DEVICE), gen_result)
-                        adv_tok = torch.from_numpy(reward).to(new_logp)                     # [N, L], group-normalized
-                        mask = (gen_result > 0).to(new_logp)
+                        adv_tok = torch.from_numpy(reward).to(DEVICE).float()               # [N, L], group-normalized
+                        mask = (gen_result > 0).to(DEVICE).float()
                         mask = torch.cat([mask.new_ones(mask.size(0), 1), mask[:, :-1]], dim=1)
+                        with torch.no_grad():
+                            old_logp = sad_logprobs_from_features(model, feats, gen_result).detach()
+
                         grpo_crit = GRPOLoss()
-                        loss = grpo_crit(new_logp, old_logp, ref_logp, adv_tok, mask,
-                                         clip_eps=args.grpo_clip_eps, kl_beta=args.grpo_kl_beta)
+                        N = gen_result.size(0)
+                        mb = args.grpo_minibatch_size if args.grpo_minibatch_size > 0 else N
+                        full_batch = mb >= N
+                        last_loss = None
+                        # --- inner PPO epochs (μ): re-score under the UPDATED policy ------
+                        for _ep in range(max(1, args.grpo_mu)):
+                            if full_batch:
+                                chunks = [None]  # sentinel: use the whole batch
+                            else:
+                                perm = torch.randperm(N, device=gen_result.device)
+                                chunks = [perm[s:s + mb] for s in range(0, N, mb)]
+                            for idx in chunks:
+                                if idx is None:
+                                    f, g = feats, gen_result
+                                    ol, rl, av, mk = old_logp, ref_logp, adv_tok, mask
+                                else:
+                                    f = {k: v[idx] for k, v in feats.items()}
+                                    g = gen_result[idx]
+                                    ol, rl, av, mk = old_logp[idx], ref_logp[idx], adv_tok[idx], mask[idx]
+                                new_logp = sad_logprobs_from_features(model, f, g)          # grad -> FC head
+                                loss = grpo_crit(new_logp, ol, rl, av, mk,
+                                                 clip_eps=args.grpo_clip_eps, kl_beta=args.grpo_kl_beta)
+                                optimizer.zero_grad()
+                                loss.backward()
+                                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                                optimizer.step()
+                                last_loss = loss.detach()
+                        scheduler.step()  # one schedule step per batch (matches the SCST path)
+                        loss = last_loss
                         reward_info["kl"] = grpo_crit.last_kl
+                        reward_info["clipfrac"] = grpo_crit.last_clipfrac
+                        grpo_stepped = True
                     else:
                         reward = torch.from_numpy(reward).to(sample_logprobs)
                         rl_crit = RewardCriterion()
@@ -973,26 +1022,29 @@ if __name__ == "__main__":
                         logger.info("loss == inf, continue")
                         continue
                     
-                    optimizer.zero_grad()
-                    loss.backward()
+                    # SCST owns its optimizer step here; GRPO already stepped inside
+                    # its own multi-epoch loop above, so skip this shared block for it.
+                    if not grpo_stepped:
+                        optimizer.zero_grad()
+                        loss.backward()
 
-                    # 梯度裁剪
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                        # 梯度裁剪
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
-                    # if opt.grad_clip_value != 0:
-                    #     getattr(torch.nn.utils, 'clip_grad_%s_' %(opt.grad_clip_mode))(model.parameters(), opt.grad_clip_value)
-                    
-                    # 梯度累积
-                    if iteration % args.accumulation_steps == 0:
-                        optimizer.step()
-                        scheduler.step()
-                    
-                    # 如果是最后一个批次时，确保更新一次
-                    if (iteration + 1) == len(dataset)//args.batch_size:
-                        optimizer.step()
-                        scheduler.step()
-                        current_lr = scheduler.get_last_lr()  # 获取当前学习率
-                        logger.info('Current learning rate: {}'.format(current_lr))
+                        # if opt.grad_clip_value != 0:
+                        #     getattr(torch.nn.utils, 'clip_grad_%s_' %(opt.grad_clip_mode))(model.parameters(), opt.grad_clip_value)
+
+                        # 梯度累积
+                        if iteration % args.accumulation_steps == 0:
+                            optimizer.step()
+                            scheduler.step()
+
+                        # 如果是最后一个批次时，确保更新一次
+                        if (iteration + 1) == len(dataset)//args.batch_size:
+                            optimizer.step()
+                            scheduler.step()
+                            current_lr = scheduler.get_last_lr()  # 获取当前学习率
+                            logger.info('Current learning rate: {}'.format(current_lr))
 
                     # Update the iteration
                     iteration += 1

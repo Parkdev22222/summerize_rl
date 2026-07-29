@@ -38,17 +38,29 @@ SARA가 우리 레포의 한국어 데이터로 학습·테스트할 수 있게 
   **KL(reference)** (`--grpo_kl_beta` 0.04, k3 추정자 `exp(Δ)−Δ−1 ≥ 0`).
 - **reference = frozen base LM**(context-aware FC 미적용). `_sad_base_forward`로 prompt+rollout을
   teacher-forcing 1회 스코어링(detached).
-- **배치당 1회 업데이트(μ=1)**: 업데이트 시점 π_θ==π_old라 `ratio=exp(new−old.detach())`가
-  값은 1이지만 **grad를 운반**(= 그룹-advantage policy gradient) + KL 정규화. clip은 μ>1에서만
-  활성인데, full-policy per-position 결합 logit이 `_sad_forward`에 없어(마지막 토큰 weight만) new_logp를
-  **생성시 scores**로 쓰므로 **μ=1만 지원**(μ>1은 시퀀스 스코어링 forward 필요 — 미구현).
-- 구현: `src/grpo_extras.py`(`group_normalized_advantage`·`GRPOLoss`·`reference_logprobs`).
-  `--rl_algo scst`면 기존 경로와 **바이트 동일**(무영향). GRPO KL은 TB `reward/kl`로 로깅.
-- ⚠️ base forward(reference)·grad 흐름은 **실 하드웨어(GPU+EXAONE) 스모크 권장**(단위테스트는
-  advantage 표준화·loss grad·KL≥0·ref 정렬을 커버).
+- **완전한 multi-epoch PPO (`--grpo_mu`, 기본 4) — clip 실작동**: 롤아웃을 **업데이트된 정책으로
+  재스코어링**해 매 inner epoch마다 `new_logp`를 다시 구한다. 그래서 epoch가 진행되며 π_θ가
+  π_old에서 벌어지고 **clip이 실제로 문**(`reward/clipfrac` 곡선으로 확인). epoch 0(및 μ=1)에선
+  π_θ==π_old → ratio=1 → clip 무효(= 그룹-advantage PG + KL, DeepSeekMath 1-iteration).
+- **재스코어링(핵심)**: SARA 정책의 결합 logit은 원래 `_sad_generate`가 **토큰 단위로만** 만들어
+  임의 시퀀스 재점수화가 불가능했음. 해결: 세 브랜치(main/presumm/null)를 `[prompt;response]`로
+  teacher-forcing forward → `_weight_from_hidden`(Linear이라 `[N,L,H]`에 broadcast)로 **per-position
+  weight `[N,L,3]`** → `(1+γ)(α·m+β·p)−γ·n` 결합 → per-token logprob(미분가능). **백본이 frozen**이라
+  세 브랜치 backbone forward는 **배치당 1회(no_grad) 캐시**하고 inner epoch에선 값싼 FC 재결합만 →
+  μ>1이 거의 공짜. FC dropout은 재스코어 중 off(결정적 ratio). 구현: `src/modeling_exaone_sad.py`의
+  `sad_branch_features`·`sad_logprobs_from_features`.
+- **미니배치(`--grpo_minibatch_size`, 기본 0=full-batch)**: >0이면 매 epoch 롤아웃 N행을 섞어
+  청크로 나눠 업데이트(표준 PPO). GRPO는 자체 optimizer 루프를 소유하고 scheduler는 **배치당 1회**
+  step(SCST와 동일한 스케줄).
+- 구현: `src/grpo_extras.py`(`group_normalized_advantage`·`GRPOLoss`(clip+KL, `.last_kl`·
+  `.last_clipfrac`)·`reference_logprobs`). `--rl_algo scst`면 기존 경로와 **바이트 동일**(무영향).
+  TB에 `reward/kl`·`reward/clipfrac` 로깅.
+- ⚠️ 재스코어링·grad 흐름은 **실 하드웨어(GPU+EXAONE) 스모크 권장**: epoch 0에서 old≈new(ratio≈1)
+  확인 → epoch>0에서 ratio 이탈 + `reward/clipfrac`↑ 확인. 단위테스트는 advantage 표준화·loss grad·
+  KL≥0·ref 정렬·**clip 활성(clipfrac, 클립영역 grad=0)**·**재스코어 수식/정렬/FC-only grad**를 커버.
 
-예: `--rl_algo grpo --num_return_sequences 4 --grpo_kl_beta 0.04 --grpo_clip_eps 0.2`
-(그룹이 의미 있으려면 `num_return_sequences ≥ 2`, 클수록 baseline 안정).
+예: `--rl_algo grpo --num_return_sequences 4 --grpo_mu 4 --grpo_kl_beta 0.04 --grpo_clip_eps 0.2`
+(그룹이 의미 있으려면 `num_return_sequences ≥ 2`, 클수록 baseline 안정. `--grpo_mu>1`이 clip을 활성화).
 
 ## 우리 데이터로 학습·테스트
 

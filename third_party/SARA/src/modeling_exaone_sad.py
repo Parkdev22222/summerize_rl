@@ -492,3 +492,112 @@ def load_exaone_sad(args):
     )
     model = add_sad_head(model, config, fc_fp32=getattr(args, "my_fc_fp32", True))
     return model
+
+
+# --------------------------------------------------------------------------- #
+# Teacher-forced re-scoring of the context-aware policy (for multi-epoch PPO)    #
+#                                                                              #
+# `_sad_generate` only produces the combined (context-aware) logits ONE token   #
+# at a time, so the rollout's per-position logprobs exist only as a by-product   #
+# of the sampling pass. Multi-epoch PPO/GRPO (μ>1) needs to re-score the SAME     #
+# rollout under the UPDATED policy each inner iteration. These two helpers do     #
+# exactly that with teacher forcing:                                             #
+#                                                                              #
+#   sad_branch_features        — run each of the 3 branches once over            #
+#                                [prompt_b ; response] (backbone is frozen, so    #
+#                                no_grad) and cache the per-position logits +     #
+#                                last-layer hidden that predict the response.     #
+#   sad_logprobs_from_features  — re-apply the FC head (the ONLY trainable part)  #
+#                                to those cached hidden states to get a           #
+#                                per-position mix weight, combine the branch      #
+#                                logits with SARA's (1+γ)(α·m+β·p)−γ·n formula,    #
+#                                and return the differentiable per-token logprob. #
+#                                                                              #
+# Because only the FC re-mix carries gradient, the expensive backbone pass runs   #
+# once per batch and every inner epoch is a cheap FC forward — so μ>1 is nearly   #
+# free. The slice `[:, Pb-1:-1, :]` mirrors reference_logprobs and assumes        #
+# left-padded prompts (the last real prompt token sits at column Pb-1), which is  #
+# what batched generation already requires.                                      #
+# --------------------------------------------------------------------------- #
+
+def _branch_seq_features(model, prompt_ids, prompt_mask, gen, nr):
+    """One branch: teacher-forced forward over [prompt;gen] -> per-position
+    (logits, hidden) that predict the ``gen`` tokens. Detached (backbone frozen).
+    """
+    prompt = prompt_ids.repeat_interleave(nr, dim=0)
+    if prompt_mask is None:
+        pmask = torch.ones_like(prompt)
+    else:
+        pmask = prompt_mask.repeat_interleave(nr, dim=0)
+    gen = gen.to(prompt.device)
+    full = torch.cat([prompt, gen], dim=1)
+    gmask = (gen > 0).to(pmask.dtype)
+    full_mask = torch.cat([pmask, gmask], dim=1)
+    position_ids = _position_ids_from_mask(full_mask, full.shape[1])
+
+    with torch.no_grad():
+        out = model._sad_base_forward(
+            model,
+            input_ids=full,
+            attention_mask=full_mask,
+            position_ids=position_ids,
+            use_cache=False,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+    plen = prompt.shape[1]
+    # positions plen-1 .. plen+L-2 predict response tokens 0 .. L-1
+    logits_seq = out.logits[:, plen - 1:-1, :].float().detach()          # [N, L, V]
+    hidden_seq = out.hidden_states[-1][:, plen - 1:-1, :].detach()       # [N, L, H]
+    return logits_seq, hidden_seq
+
+
+def sad_branch_features(model, main_ids, main_mask, presumm_ids, presumm_mask,
+                        null_ids, null_mask, gen_result):
+    """Cache the 3 branches' per-position (logits, hidden) for the rollout.
+
+    Runs the frozen backbone once per branch (no_grad) over
+    ``[branch_prompt ; response]`` and returns a dict of six detached tensors
+    (main/presumm/null × logits[N,L,V] / hidden[N,L,H]). Reused across every PPO
+    inner epoch — only the cheap FC re-mix in ``sad_logprobs_from_features``
+    re-runs per epoch, so the backbone cost is paid just once.
+    """
+    nr = gen_result.shape[0] // main_ids.shape[0]
+    m_logits, m_hidden = _branch_seq_features(model, main_ids, main_mask, gen_result, nr)
+    p_logits, p_hidden = _branch_seq_features(model, presumm_ids, presumm_mask, gen_result, nr)
+    n_logits, n_hidden = _branch_seq_features(model, null_ids, null_mask, gen_result, nr)
+    return {
+        "m_logits": m_logits, "m_hidden": m_hidden,
+        "p_logits": p_logits, "p_hidden": p_hidden,
+        "n_logits": n_logits, "n_hidden": n_hidden,
+    }
+
+
+def sad_logprobs_from_features(model, feats, gen_result, deterministic=True):
+    """Differentiable per-token logprob of ``gen_result`` under the context-aware
+    policy, re-mixing the cached branch features with the CURRENT FC head.
+
+    Gradient flows only through the FC head (my_all_f/my_all_f1/my_f) — the branch
+    logits/hidden are detached constants — exactly matching SARA's training setup
+    where only the ``my_*`` layers are trainable. With ``deterministic`` the FC
+    dropout is disabled during the call (restored after) so the importance ratio
+    old/new is well-defined across PPO epochs. Returns ``[N, L]``.
+    """
+    was_training = model.dropout.training
+    if deterministic:
+        model.dropout.eval()
+    try:
+        weight = _weight_from_hidden(model, feats["m_hidden"], feats["p_hidden"],
+                                     feats["n_hidden"])              # [N, L, 3]
+        ab = torch.softmax(weight[..., :2], dim=-1)
+        alpha, beta = ab[..., 0:1], ab[..., 1:2]
+        gamma = torch.sigmoid(weight[..., 2:3])
+        combined = (1 + gamma) * (alpha * feats["m_logits"] + beta * feats["p_logits"]) \
+            - gamma * feats["n_logits"]                             # [N, L, V]
+        logp = torch.log_softmax(combined.float(), dim=-1)
+        gen = gen_result.to(logp.device)
+        new_logp = logp.gather(2, gen.unsqueeze(2)).squeeze(2)      # [N, L]
+    finally:
+        if deterministic and was_training:
+            model.dropout.train()
+    return new_logp

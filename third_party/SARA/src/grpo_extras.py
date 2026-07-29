@@ -12,10 +12,16 @@ greedy_reward, optimized with a plain REINFORCE criterion. GRPO instead:
 
 Kept in a separate module (like reward_extras.py) so the upstream SARA files
 stay minimally changed and the math is unit-testable. Enabled by --rl_algo grpo
-(default scst); a single policy update is applied per rollout batch (μ=1), for
-which π_θ == π_old at update time so the ratio carries the gradient and the clip
-is inactive — the effective objective is group-advantage policy gradient + KL,
-which is exactly DeepSeekMath GRPO with one inner iteration.
+(default scst).
+
+Multi-epoch (μ>1) is supported: the rollout is re-scored under the *updated*
+context-aware policy each inner iteration (see ``sad_branch_features`` /
+``sad_logprobs_from_features`` in modeling_exaone_sad.py), so π_θ drifts from
+π_old across epochs and the PPO clip becomes active. At μ=1 (or the very first
+epoch) π_θ == π_old, the ratio is 1, and the clip is a no-op — the effective
+objective is then group-advantage policy gradient + KL (DeepSeekMath GRPO with
+one inner iteration). ``GRPOLoss.last_clipfrac`` reports the fraction of tokens
+the clip actually bound, so you can watch it rise once μ>1 kicks in.
 
 ⚠️ Validate reference_logprobs on real hardware: it runs the backbone's own
 forward (``_sad_base_forward``) over prompt+rollout to score the reference.
@@ -58,7 +64,9 @@ class GRPOLoss(nn.Module):
       adv       — per-token advantage (group-normalized, broadcast over L)
       mask      — 1 for real tokens, 0 after EOS/pad
     KL uses the k3 estimator exp(Δ) − Δ − 1 (Δ = ref − new), which is ≥0 and
-    unbiased. Returns a scalar loss; `.last_kl` holds the mean KL for logging.
+    unbiased. Returns a scalar loss; `.last_kl` holds the mean KL and
+    `.last_clipfrac` the fraction of unmasked tokens whose ratio left the
+    [1-eps, 1+eps] band (both detached, for logging).
     """
 
     def forward(self, new_logp, old_logp, ref_logp, adv, mask,
@@ -73,6 +81,10 @@ class GRPOLoss(nn.Module):
 
         denom = mask.sum().clamp(min=1.0)
         self.last_kl = float(((kl * mask).sum() / denom).detach())
+        # clip fraction: tokens where the ratio was pushed outside the trust band
+        # (CleanRL-style diagnostic). 0 at μ=1 (ratio==1); rises once π_θ drifts.
+        clipped = (torch.abs(ratio - 1.0) > clip_eps).to(mask.dtype)
+        self.last_clipfrac = float(((clipped * mask).sum() / denom).detach())
         per_tok = pg + kl_beta * kl
         return (per_tok * mask).sum() / denom
 

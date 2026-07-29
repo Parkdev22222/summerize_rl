@@ -115,8 +115,137 @@ def test_reference_logprobs_shape_and_alignment():
     print("PASS test_reference_logprobs_shape_and_alignment")
 
 
+def test_grpo_loss_clip_activation():
+    """When π_θ drifts from π_old (μ>1), the ratio leaves the trust band: the
+    clipped surrogate is selected (grad vanishes in the clipped region) and
+    last_clipfrac reports it. At μ=1 (new==old) nothing is clipped."""
+    if not HAVE_TORCH:
+        print("SKIP test_grpo_loss_clip_activation (torch unavailable)"); return
+    from grpo_extras import GRPOLoss
+    N, L = 1, 2
+    adv = torch.full((N, L), 2.0)          # positive advantage
+    mask = torch.ones(N, L)
+    old = torch.zeros(N, L)
+    ref = torch.zeros(N, L)
+    # new = old + 1  ->  ratio = e ≈ 2.718 > 1 + clip_eps(0.2)
+    new = torch.ones(N, L, requires_grad=True)
+    crit = GRPOLoss()
+    loss = crit(new, old, ref, adv, mask, clip_eps=0.2, kl_beta=0.0)
+    assert crit.last_clipfrac == 1.0, f"all tokens should clip; got {crit.last_clipfrac}"
+    loss.backward()
+    # clipped surrogate (1+eps)*adv is constant in the clipped region -> zero grad
+    assert torch.allclose(new.grad, torch.zeros(N, L), atol=1e-6), \
+        f"grad must vanish inside the clip region; got {new.grad}"
+    # μ=1 sanity: identical policies -> nothing clipped
+    crit0 = GRPOLoss()
+    _ = crit0(old.clone().requires_grad_(True), old, ref, adv, mask, clip_eps=0.2, kl_beta=0.0)
+    assert crit0.last_clipfrac == 0.0, "ratio==1 must give clipfrac 0"
+    print("PASS test_grpo_loss_clip_activation")
+
+
+def _fake_fc_model(H, A):
+    """A minimal object exposing the SAD FC head that _weight_from_hidden uses."""
+    import torch.nn as nn
+    m = SimpleNamespace()
+    m.my_all_f = nn.Linear(3 * H, A)
+    m.my_all_f1 = nn.Linear(A, A)
+    m.my_f = nn.Linear(A, 3)
+    m.relu, m.relu2 = nn.ReLU(), nn.ReLU()
+    m.dropout = nn.Dropout(0.0)
+    m.sqrt_dimension = 0          # disable the 1/sqrt(d) scaling for an exact hand-calc
+    m.sqrt_method = "concate_dim"
+    return m
+
+
+def test_sad_logprobs_from_features_math_and_grad():
+    """sad_logprobs_from_features re-mixes cached branch features with the FC head:
+    verify it equals the hand-computed (1+γ)(α·m+β·p)−γ·n log-softmax, and that
+    gradient reaches the FC params (the branch features are constants)."""
+    if not HAVE_TORCH:
+        print("SKIP test_sad_logprobs_from_features_math_and_grad (torch unavailable)"); return
+    import torch.nn.functional as F
+    from modeling_exaone_sad import sad_logprobs_from_features
+    N, L, V, H, A = 2, 3, 5, 4, 6
+    m = _fake_fc_model(H, A)
+    feats = {
+        "m_logits": torch.randn(N, L, V), "m_hidden": torch.randn(N, L, H),
+        "p_logits": torch.randn(N, L, V), "p_hidden": torch.randn(N, L, H),
+        "n_logits": torch.randn(N, L, V), "n_hidden": torch.randn(N, L, H),
+    }
+    gen = torch.randint(0, V, (N, L))
+    new_logp = sad_logprobs_from_features(m, feats, gen)
+    assert new_logp.shape == (N, L), f"expected [N,L], got {tuple(new_logp.shape)}"
+
+    # hand recompute the same combination
+    x = torch.cat([feats["m_hidden"], feats["p_hidden"], feats["n_hidden"]], dim=-1)
+    w = m.my_f(m.relu2(m.my_all_f1(m.relu(m.my_all_f(x)))))
+    ab = torch.softmax(w[..., :2], dim=-1)
+    alpha, beta = ab[..., 0:1], ab[..., 1:2]
+    gamma = torch.sigmoid(w[..., 2:3])
+    combined = (1 + gamma) * (alpha * feats["m_logits"] + beta * feats["p_logits"]) - gamma * feats["n_logits"]
+    exp_logp = F.log_softmax(combined.float(), dim=-1).gather(2, gen.unsqueeze(2)).squeeze(2)
+    assert torch.allclose(new_logp, exp_logp, atol=1e-6), "combination/log-softmax/gather mismatch"
+
+    # gradient must reach the FC head (branch features are plain constants here)
+    new_logp.sum().backward()
+    assert m.my_all_f.weight.grad is not None and torch.isfinite(m.my_all_f.weight.grad).all(), \
+        "FC head must receive gradient"
+    assert m.my_f.weight.grad is not None, "output FC layer must receive gradient"
+    print("PASS test_sad_logprobs_from_features_math_and_grad")
+
+
+def test_sad_branch_features_shape_align_detach():
+    """sad_branch_features slices the L positions predicting the response from each
+    branch's teacher-forced forward: verify shapes, the [:,Pb-1:-1] alignment, and
+    that the cached tensors are detached (backbone is frozen)."""
+    if not HAVE_TORCH:
+        print("SKIP test_sad_branch_features_shape_align_detach (torch unavailable)"); return
+    from modeling_exaone_sad import sad_branch_features
+    B, L, V, H, nr = 2, 3, 5, 4, 2
+    N = B * nr
+    Pm, Pp, Pn = 6, 4, 2          # three branches, different prompt lengths
+    main_ids = torch.randint(1, V, (B, Pm))
+    presumm_ids = torch.randint(1, V, (B, Pp))
+    null_ids = torch.randint(1, V, (B, Pn))
+    main_mask = torch.ones(B, Pm, dtype=torch.long)
+    presumm_mask = torch.ones(B, Pp, dtype=torch.long)
+    gen = torch.randint(1, V, (N, L))
+
+    # fake backbone: channel-0 of logits/hidden encodes the absolute position index,
+    # so we can check the slice picks positions Pb-1 .. Pb+L-2.
+    def _base_forward(model, input_ids=None, attention_mask=None, position_ids=None, **kw):
+        Nn, T = input_ids.shape
+        logits = torch.zeros(Nn, T, V)
+        hidden = torch.zeros(Nn, T, H)
+        pos = torch.arange(T, dtype=torch.float32).unsqueeze(0).expand(Nn, T)
+        logits[:, :, 0] = pos
+        hidden[:, :, 0] = pos
+        return SimpleNamespace(logits=logits, hidden_states=(hidden,))
+
+    m = SimpleNamespace(_sad_base_forward=_base_forward)
+    feats = sad_branch_features(m, main_ids, main_mask, presumm_ids, presumm_mask,
+                                null_ids, None, gen)   # null uses ones-mask (None)
+    for k in ("m_logits", "p_logits", "n_logits"):
+        assert feats[k].shape == (N, L, V), f"{k} shape {tuple(feats[k].shape)}"
+        assert not feats[k].requires_grad, f"{k} must be detached"
+    for k in ("m_hidden", "p_hidden", "n_hidden"):
+        assert feats[k].shape == (N, L, H) and not feats[k].requires_grad
+
+    # main branch: sliced positions must be Pm-1 .. Pm-1+L-1
+    exp_pos = torch.arange(Pm - 1, Pm - 1 + L, dtype=torch.float32)
+    assert torch.allclose(feats["m_logits"][0, :, 0], exp_pos), "main-branch slice misaligned"
+    assert torch.allclose(feats["p_logits"][0, :, 0],
+                          torch.arange(Pp - 1, Pp - 1 + L, dtype=torch.float32)), "presumm slice misaligned"
+    assert torch.allclose(feats["n_logits"][0, :, 0],
+                          torch.arange(Pn - 1, Pn - 1 + L, dtype=torch.float32)), "null slice misaligned"
+    print("PASS test_sad_branch_features_shape_align_detach")
+
+
 if __name__ == "__main__":
     test_group_normalized_advantage()
     test_grpo_loss_gradient()
     test_grpo_loss_kl_nonneg_and_mask()
     test_reference_logprobs_shape_and_alignment()
+    test_grpo_loss_clip_activation()
+    test_sad_logprobs_from_features_math_and_grad()
+    test_sad_branch_features_shape_align_detach()
