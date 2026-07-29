@@ -414,6 +414,48 @@ def _sad_generate(
 # Attaching the head to a loaded backbone                                      #
 # --------------------------------------------------------------------------- #
 
+def _find_last_output_proj(model, hidden):
+    """Locate the last decoder block's attention output projection.
+
+    Handles Llama-style (`...layers.N.self_attn.o_proj`) and EXAONE/GPT-style
+    (`...h.N.attn.attention.out_proj`) naming, matching only the square
+    ``hidden×hidden`` projection. Returns the ``nn.Linear`` from the highest
+    layer index (falls back to last-seen when no index is parseable), or ``None``.
+    """
+    import re
+    cands = []  # (layer_idx, module)
+    for name, mod in model.named_modules():
+        if not isinstance(mod, nn.Linear):
+            continue
+        if name.rsplit(".", 1)[-1] not in ("o_proj", "out_proj"):
+            continue
+        if tuple(mod.weight.shape) != (hidden, hidden):
+            continue
+        m = re.search(r"(?:layers|h)\.(\d+)\.", name)
+        cands.append((int(m.group(1)) if m else -1, mod))
+    if not cands:
+        return None
+    cands.sort(key=lambda t: t[0])
+    return cands[-1][1]
+
+
+def _init_linear_from_output_proj(target_linear, model, hidden, dev, dtype):
+    """Warm-start ``target_linear`` (hidden×hidden) from the backbone's last
+    attention output projection; zero its bias. Returns True if applied.
+
+    ``target_linear`` (my_all_f1) is trainable, so this only changes the init;
+    the copied weights are then free to move during RL training.
+    """
+    src = _find_last_output_proj(model, hidden)
+    if src is None:
+        return False
+    with torch.no_grad():
+        target_linear.weight.copy_(src.weight.to(device=dev, dtype=dtype))
+        if target_linear.bias is not None:
+            target_linear.bias.zero_()
+    return True
+
+
 def add_sad_head(model, config, fc_fp32: bool = True):
     """Rebless ``model`` to a SAD subclass and attach the 3 FC layers.
 
@@ -460,6 +502,19 @@ def add_sad_head(model, config, fc_fp32: bool = True):
     dtype = torch.float32 if fc_fp32 else ref_param.dtype
     for m in (model.my_all_f, model.my_all_f1, model.my_f):
         m.to(device=dev, dtype=dtype)
+
+    # Optional warm-start: my_all_f1 (hidden×hidden) is the only FC layer whose
+    # shape matches a backbone weight, so it can be seeded from the last decoder
+    # block's attention output projection (o_proj / out_proj). Default = random.
+    fc_init = str(getattr(config, "fc_init", "none")).lower()
+    if fc_init in ("oproj", "o_proj", "out_proj"):
+        ok = _init_linear_from_output_proj(model.my_all_f1, model, hidden, dev, dtype)
+        msg = ("[SAD] my_all_f1 warm-started from last-block output projection "
+               "({h}x{h})".format(h=hidden) if ok else
+               "[SAD] fc_init='oproj' but no {h}x{h} output projection found; "
+               "keeping random init".format(h=hidden))
+        print(msg)
+        model._fc_init_applied = ok
     return model
 
 
@@ -482,6 +537,7 @@ def load_exaone_sad(args):
     config.dropout_rate = getattr(args, "dropout_rate", 0.0)
     config.sqrt_dimension = getattr(args, "sqrt_dimension", 1)
     config.sqrt_method = getattr(args, "sqrt_method", "concate_dim")
+    config.fc_init = getattr(args, "fc_init", "none")  # 'none' | 'oproj'
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name_or_path,

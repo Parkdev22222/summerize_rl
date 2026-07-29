@@ -91,6 +91,18 @@ EXAONE 3.5는 fork에 없는 자체 아키텍처(`trust_remote_code`)라 정적 
 
 사용: `--model_name_or_path LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct` (또는 2.4B) 지정.
 
+### FC head 초기화 옵션 (`--fc_init`, 기본 `none`)
+정책망(FC 3층)은 백본이 frozen이라 **유일하게 학습되는 부분**이고, 기본은 랜덤 init이다.
+`--fc_init oproj`를 주면 **`my_all_f1`(hidden×hidden)만** 백본의 **마지막 디코더 블록 어텐션
+출력 투영(`o_proj`/`out_proj`, hidden×hidden)** 에서 warm-start 한다(bias는 0). 세 FC층 중
+shape가 백본 가중치와 정확히 일치하는 건 `my_all_f1` 뿐이라 여기만 이식 대상이다
+(`my_all_f`는 입력이 3×hidden, `my_f`는 출력 3차원이라 대응 가중치 없음).
+- 구현: `modeling_exaone_sad.py`의 `_find_last_output_proj`(Llama식 `o_proj`·EXAONE식
+  `out_proj` 모두 지원, 최상위 레이어 선택) + `_init_linear_from_output_proj`. `load_exaone_sad`가
+  `config.fc_init`로 전달, `add_sad_head`가 적용. 대상 못 찾으면 랜덤 init 유지(무해).
+- 주의: 이 FC는 "브랜치 혼합 게이트"라 o_proj 이식이 학습을 개선한다는 이론적 보장은 약함
+  (실험용). 적용 시 콘솔에 `[SAD] my_all_f1 warm-started ...` 로그가 뜬다.
+
 ### fork 불필요 — 자체 context-aware generate 사용
 원래 SARA의 3브랜치 결합은 **fork(transformers 4.36)의 `generation/utils.py: sample()`** 에만
 있었다. 하지만 EXAONE 3.5는 최신 transformers에서만 로드되므로, fork에 의존하지 않도록

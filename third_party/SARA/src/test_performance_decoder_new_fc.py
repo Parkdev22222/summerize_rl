@@ -519,6 +519,9 @@ if __name__ == "__main__":
     parser.add_argument("--sqrt_dimension_second", type=int, default=1, help='whether do sqrt dimension on hidden states')  # todo 最后记得改成store_true
     parser.add_argument("--sqrt_method", type=str, default='concate_dim', help='concate_dim/ hidden_dim / log / sqrt05 / head_dim') 
     parser.add_argument("--my_fc_fp32", action="store_true", help='whether let my fc layer fp32')
+    parser.add_argument("--fc_init", type=str, default="none", choices=["none", "oproj"],
+                        help="SAD FC head init: 'none' = random (default); 'oproj' warm-starts "
+                             "my_all_f1 (hidden x hidden) from the backbone's last attention output projection.")
     parser.add_argument("--ablation_main_sequence", action="store_true", help='whether ablation main sequence, alpha=0')
     parser.add_argument("--ablation_presumm_sequence", action="store_true", help='whether ablation presumm sequence, beta=0')
     parser.add_argument("--ablation_null_sequence", action="store_true", help='whether ablation null sequence, gamma=0')

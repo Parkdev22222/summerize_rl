@@ -221,8 +221,83 @@ def test_backbone_judge_scores_via_generate():
     print("PASS test_backbone_judge_scores_via_generate")
 
 
+def _tiny_backbone(hidden, n_layers, style="llama", bias=False):
+    """Minimal module tree exposing per-layer attention output projections,
+    named the Llama way (model.layers.N.self_attn.o_proj) or EXAONE way
+    (transformer.h.N.attn.attention.out_proj). Each layer's weight is filled
+    with its index so tests can tell which one was picked."""
+    class Attn(nn.Module):
+        def __init__(self):
+            super().__init__()
+            proj = nn.Linear(hidden, hidden, bias=bias)
+            if style == "llama":
+                self.o_proj = proj
+            else:
+                self.attention = nn.Module(); self.attention.out_proj = proj
+    class Layer(nn.Module):
+        def __init__(self, i):
+            super().__init__()
+            if style == "llama":
+                self.self_attn = Attn()
+                w = self.self_attn.o_proj.weight
+            else:
+                self.attn = Attn()
+                w = self.attn.attention.out_proj.weight
+            with torch.no_grad():
+                w.fill_(float(i))
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            layers = nn.ModuleList([Layer(i) for i in range(n_layers)])
+            if style == "llama":
+                self.model = nn.Module(); self.model.layers = layers
+            else:
+                self.transformer = nn.Module(); self.transformer.h = layers
+    return Model()
+
+
+def test_find_last_output_proj():
+    if not HAVE_TORCH:
+        print("SKIP test_find_last_output_proj (torch unavailable)")
+        return
+    from modeling_exaone_sad import _find_last_output_proj
+    H = 8
+    for style in ("llama", "exaone"):
+        m = _tiny_backbone(H, 4, style=style)
+        found = _find_last_output_proj(m, H)
+        assert found is not None, f"{style}: should locate an output projection"
+        # highest layer index (3) must be chosen -> its weights were filled with 3.0
+        assert torch.allclose(found.weight, torch.full((H, H), 3.0)), \
+            f"{style}: must pick the LAST layer's projection"
+    # wrong hidden size -> no match
+    assert _find_last_output_proj(_tiny_backbone(H, 2), H + 1) is None
+    print("PASS test_find_last_output_proj")
+
+
+def test_init_linear_from_output_proj():
+    if not HAVE_TORCH:
+        print("SKIP test_init_linear_from_output_proj (torch unavailable)")
+        return
+    from modeling_exaone_sad import _init_linear_from_output_proj
+    H = 8
+    m = _tiny_backbone(H, 3, style="llama")
+    target = nn.Linear(H, H)  # my_all_f1 stand-in (has bias)
+    with torch.no_grad():
+        target.bias.fill_(0.5)
+    ok = _init_linear_from_output_proj(target, m, H, torch.device("cpu"), torch.float32)
+    assert ok is True
+    assert torch.allclose(target.weight, torch.full((H, H), 2.0)), "weight must copy last o_proj (idx 2)"
+    assert torch.allclose(target.bias, torch.zeros(H)), "bias must be zeroed"
+    # backbone without any output projection -> not applied
+    empty = nn.Linear(H, H)  # no o_proj/out_proj anywhere
+    assert _init_linear_from_output_proj(nn.Linear(H, H), empty, H, torch.device("cpu"), torch.float32) is False
+    print("PASS test_init_linear_from_output_proj")
+
+
 if __name__ == "__main__":
     test_sad_head_forward_contract()
     test_sad_generate_contract()
     test_sad_generate_grad_flows_to_fc()
     test_backbone_judge_scores_via_generate()
+    test_find_last_output_proj()
+    test_init_linear_from_output_proj()
