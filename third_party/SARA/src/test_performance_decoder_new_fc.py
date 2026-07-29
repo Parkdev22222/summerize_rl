@@ -76,7 +76,8 @@ def array_to_str(arr):
 def get_self_critical_reward(greedy_res, data_gts, gen_result, tokenizer, RougeL_reward_weight, Rouge1_reward_weight,
                              Rouge2_reward_weight, factkb_weight, logger, batch_input,
                              batch_triplets=None, triplet_coverage_weight=0.0,
-                             judge_weight=0.0, judge=None, batch_keyfacts=None):
+                             judge_weight=0.0, judge=None, batch_keyfacts=None,
+                             algo="scst", grpo_adv_eps=1e-4):
 
     batch_size = len(data_gts)  # 2
     gen_result_size = gen_result.shape[0]  # 4
@@ -233,6 +234,17 @@ def get_self_critical_reward(greedy_res, data_gts, gen_result, tokenizer, RougeL
     # ported reference-free reward terms: triplet-coverage & judge add
     scores = scores + triplet_coverage_weight * TripCov_scores + judge_weight * Judge_scores
     reward_info["weighted_mean"] = float(np.mean(scores[:gen_result_size]))
+
+    # GRPO: group-relative advantage over each prompt's rollouts (no greedy
+    # baseline). Returns [N, L] aligned with gen_result rows. SCST path below
+    # is left byte-identical (runs only when algo != 'grpo').
+    if algo == "grpo":
+        from grpo_extras import group_normalized_advantage
+        adv = group_normalized_advantage(scores[:gen_result_size], seq_per_img, eps=grpo_adv_eps)
+        reward_info["advantage_absmean"] = float(np.mean(np.abs(adv)))
+        rewards = np.repeat(adv[:, np.newaxis], gen_result.shape[1], axis=1)
+        return rewards, reward_info
+
     scores = scores[:gen_result_size].reshape(batch_size, seq_per_img) - scores[-batch_size:][:, np.newaxis]
     
     # scores_tmp = RougeL_reward_weight * scores + Rouge1_reward_weight * Rouge1_scores + Rouge2_reward_weight * Rouge2_scores + factkb_weight * Factkb_scores
@@ -503,6 +515,13 @@ if __name__ == "__main__":
     parser.add_argument("--debug_flag", action="store_true", help='whether debug on a small portion of data')
     parser.add_argument("--debug_num", type=int, default=5)
     parser.add_argument("--use_log_softmax", action="store_true", help='whether to use log_softmax')
+    # RL algorithm: SCST (default, greedy baseline + REINFORCE) or GRPO (group-relative
+    # advantage + PPO clipped surrogate + KL to the frozen base LM; single update per batch).
+    parser.add_argument("--rl_algo", type=str, default="scst", choices=["scst", "grpo"],
+                        help="RL objective: 'scst' (default) or 'grpo'.")
+    parser.add_argument("--grpo_clip_eps", type=float, default=0.2, help="GRPO PPO clip epsilon.")
+    parser.add_argument("--grpo_kl_beta", type=float, default=0.04, help="GRPO KL-to-reference coefficient.")
+    parser.add_argument("--grpo_adv_eps", type=float, default=1e-4, help="GRPO group-std stabilizer.")
     parser.add_argument("--dropout_rate", type=float, default=0.0)
     parser.add_argument("--warmup_step", type=float, default=100)
     parser.add_argument("--warmup_train_step", type=float, default=2000)
@@ -862,11 +881,29 @@ if __name__ == "__main__":
                                                     batch_triplets=batch_triplets,
                                                     triplet_coverage_weight=args.triplet_coverage_weight,
                                                     judge_weight=args.judge_weight, judge=judge_model,
-                                                    batch_keyfacts=batch_keyfacts)
-                    
-                    reward = torch.from_numpy(reward).to(sample_logprobs)   
-                    rl_crit = RewardCriterion()
-                    loss = rl_crit(sample_logprobs, gen_result.data, reward, reduction='mean')
+                                                    batch_keyfacts=batch_keyfacts,
+                                                    algo=args.rl_algo, grpo_adv_eps=args.grpo_adv_eps)
+
+                    if args.rl_algo == "grpo":
+                        from grpo_extras import GRPOLoss, reference_logprobs
+                        # per-token logprob of the sampled tokens under the current
+                        # policy (differentiable -> grad flows to the FC head).
+                        logp_all = F.log_softmax(scores, dim=-1)
+                        new_logp = logp_all.gather(2, gen_result.unsqueeze(2)).squeeze(2)  # [N, L]
+                        old_logp = new_logp.detach()                                        # μ=1: π_old == π_θ
+                        ref_logp = reference_logprobs(model, tokenized_input.input_ids.to(DEVICE),
+                                                      tokenized_input.attention_mask.to(DEVICE), gen_result)
+                        adv_tok = torch.from_numpy(reward).to(new_logp)                     # [N, L], group-normalized
+                        mask = (gen_result > 0).to(new_logp)
+                        mask = torch.cat([mask.new_ones(mask.size(0), 1), mask[:, :-1]], dim=1)
+                        grpo_crit = GRPOLoss()
+                        loss = grpo_crit(new_logp, old_logp, ref_logp, adv_tok, mask,
+                                         clip_eps=args.grpo_clip_eps, kl_beta=args.grpo_kl_beta)
+                        reward_info["kl"] = grpo_crit.last_kl
+                    else:
+                        reward = torch.from_numpy(reward).to(sample_logprobs)
+                        rl_crit = RewardCriterion()
+                        loss = rl_crit(sample_logprobs, gen_result.data, reward, reduction='mean')
 
                     criterion = torch.nn.CrossEntropyLoss() # ignore_index=ignore_index
                     # 计算每个生成序列的交叉熵损失

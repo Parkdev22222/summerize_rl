@@ -28,6 +28,28 @@ SARA가 우리 레포의 한국어 데이터로 학습·테스트할 수 있게 
 - 더 강한 옵션(후보 vs greedy comparative)은 품질↑이나 배선/속도 부담이 커 현재 미채택.
 - 세 가중치가 모두 0이면 SARA의 원래 보상(ROUGE+FactKB)과 **완전히 동일**하다.
 
+## 강화학습 알고리즘: SCST(기본) / GRPO (`--rl_algo`)
+
+`--rl_algo scst`(기본)는 SARA 원본 self-critical: advantage = `sample − greedy`, REINFORCE
+(`RewardCriterion`). `--rl_algo grpo`로 **정식 GRPO** 사용:
+- **advantage**: greedy 대신 **그룹**(같은 프롬프트의 `--num_return_sequences` 롤아웃) 표준화
+  `(r − group_mean)/(group_std + eps)` (`--grpo_adv_eps` 기본 1e-4).
+- **loss**: PPO clipped surrogate `-min(ratio·A, clip(ratio,1±ε)·A)` (`--grpo_clip_eps` 0.2) +
+  **KL(reference)** (`--grpo_kl_beta` 0.04, k3 추정자 `exp(Δ)−Δ−1 ≥ 0`).
+- **reference = frozen base LM**(context-aware FC 미적용). `_sad_base_forward`로 prompt+rollout을
+  teacher-forcing 1회 스코어링(detached).
+- **배치당 1회 업데이트(μ=1)**: 업데이트 시점 π_θ==π_old라 `ratio=exp(new−old.detach())`가
+  값은 1이지만 **grad를 운반**(= 그룹-advantage policy gradient) + KL 정규화. clip은 μ>1에서만
+  활성인데, full-policy per-position 결합 logit이 `_sad_forward`에 없어(마지막 토큰 weight만) new_logp를
+  **생성시 scores**로 쓰므로 **μ=1만 지원**(μ>1은 시퀀스 스코어링 forward 필요 — 미구현).
+- 구현: `src/grpo_extras.py`(`group_normalized_advantage`·`GRPOLoss`·`reference_logprobs`).
+  `--rl_algo scst`면 기존 경로와 **바이트 동일**(무영향). GRPO KL은 TB `reward/kl`로 로깅.
+- ⚠️ base forward(reference)·grad 흐름은 **실 하드웨어(GPU+EXAONE) 스모크 권장**(단위테스트는
+  advantage 표준화·loss grad·KL≥0·ref 정렬을 커버).
+
+예: `--rl_algo grpo --num_return_sequences 4 --grpo_kl_beta 0.04 --grpo_clip_eps 0.2`
+(그룹이 의미 있으려면 `num_return_sequences ≥ 2`, 클수록 baseline 안정).
+
 ## 우리 데이터로 학습·테스트
 
 `--dataset summarize_rl_ko` 를 주면 `data/scenarios_ko.jsonl`(train 140 / eval 10)과
