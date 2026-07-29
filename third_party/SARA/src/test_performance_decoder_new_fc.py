@@ -376,7 +376,19 @@ def test(args, test_set, logger, tokenizer, DEVICE, model, generation_config):
 
     assert len(predictions)==len(references), "mismatched shape, force exit!"
     evaluator = Evaluator()
-    result_dict = evaluator.evaluate(predictions, references, documents, metrics=["rouge", "sacre_bleu", "bertscore", "factkb"])
+    # Validation/model-selection metrics: ROUGE only by default. BERTScore
+    # (evaluate.load / roberta-large) and FactKB (local English RoBERTa at
+    # ../data/pretrained_models) need models that aren't present here and are
+    # English-only — inappropriate for this Korean corpus and they crash the run.
+    # ROUGE (torchmetrics) is pure and always available, and drives added_results.
+    result_dict = evaluator.evaluate(predictions, references, documents, metrics=["rouge"])
+    # FactKB stays optional: only when weighted (--test_factkb_weight > 0) AND its
+    # local model actually loads; any failure degrades to 0.0 instead of crashing.
+    if getattr(args, "test_factkb_weight", 0.0) > 0:
+        try:
+            result_dict["factkb"] = evaluator.calculate_factkb(predictions, documents)
+        except Exception as e:  # noqa: BLE001 — missing model / bad path -> skip
+            logger.info("FactKB unavailable, skipping in validation: {}: {}".format(type(e).__name__, e))
     for k, v in result_dict.items():
         logger.info(f"{k} -> {v*100:.2f}")
     logger.info("\n")
@@ -400,7 +412,7 @@ def test(args, test_set, logger, tokenizer, DEVICE, model, generation_config):
     # Rouge2_scores.append(result_dict['rouge2_fmeasure'])
     # Factkb_scores.append(result_dict['factkb'])
     
-    return (result_dict['rougeLsum_fmeasure'], result_dict['rouge1_fmeasure'], result_dict['rouge2_fmeasure'], result_dict['factkb'])   # 返回rouge-L
+    return (result_dict['rougeLsum_fmeasure'], result_dict['rouge1_fmeasure'], result_dict['rouge2_fmeasure'], result_dict.get('factkb', 0.0))   # 返回rouge-L
 
 
 def convert_my_layers_to_fp32(model):
