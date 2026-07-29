@@ -526,6 +526,8 @@ if __name__ == "__main__":
     parser.add_argument("--logging", type=str, default="./default_decoder.log")
     parser.add_argument("--tensorboard_logdir", type=str, default="",
                         help="TensorBoard log dir (empty = disabled). Logs train/loss and reward/* per step.")
+    parser.add_argument("--reward_ema_beta", type=float, default=0.98,
+                        help="EMA smoothing factor for reward_ema/* TensorBoard curves (higher = smoother).")
     args = parser.parse_args()
 
     # 打印全部
@@ -775,6 +777,11 @@ if __name__ == "__main__":
                 logger.info("TensorBoard disabled (%s) — run `pip install tensorboard`", e)
                 print("[TensorBoard] disabled ({}). Install it: pip install tensorboard".format(e))
 
+        # Running EMA of each reward component, for smoothed reward_ema/* curves
+        # (per-step reward is very noisy: only batch_size*num_return rollouts/step).
+        from reward_extras import ema_update
+        reward_ema = {}
+
         # LLM-as-judge using the LOCAL EXAONE backbone (no API key / network).
         judge_model = None
         if args.judge_weight > 0:
@@ -918,6 +925,10 @@ if __name__ == "__main__":
                         writer.add_scalar("train/loss", loss.item(), iteration)
                         for _k, _v in reward_info.items():
                             writer.add_scalar("reward/{}".format(_k), _v, iteration)
+                            # smoothed twin: the raw per-step reward is dominated by
+                            # rollout noise, so reward_ema/* shows the actual trend.
+                            reward_ema[_k] = ema_update(reward_ema.get(_k), _v, args.reward_ema_beta)
+                            writer.add_scalar("reward_ema/{}".format(_k), reward_ema[_k], iteration)
                         writer.flush()  # make points visible immediately
 
                     train_loss = loss.item()
@@ -1015,6 +1026,19 @@ if __name__ == "__main__":
 
                     # Dump miscalleous informations
                     logger.info('best_val_score: {}'.format(best_val_score))
+
+                    # Validation curves in TensorBoard: greedy-decoded on the whole
+                    # test set every save_checkpoint_every steps -> the smoothest
+                    # "is it actually improving" signal (val/best_added_results is
+                    # monotone by construction).
+                    if writer is not None:
+                        writer.add_scalar("val/rougeLsum", results[0], iteration)
+                        writer.add_scalar("val/rouge1", results[1], iteration)
+                        writer.add_scalar("val/rouge2", results[2], iteration)
+                        writer.add_scalar("val/factkb", results[3], iteration)
+                        writer.add_scalar("val/added_results", added_results, iteration)
+                        writer.add_scalar("val/best_added_results", best_val_score, iteration)
+                        writer.flush()
 
                     save_checkpoint(args, model, infos, optimizer, histories)
                     if args.save_history_ckpt:

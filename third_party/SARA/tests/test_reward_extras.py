@@ -104,6 +104,24 @@ def test_judge_prompt_keyfacts_list_form():
     assert "블루포스 1,000명" in p and "[핵심 사실]" in p
 
 
+def test_ema_update():
+    # first call seeds with `new`
+    assert R.ema_update(None, 1.5) == 1.5
+    # smoothed value stays between prev and new
+    e = R.ema_update(0.0, 1.0, beta=0.9)
+    assert abs(e - 0.1) < 1e-9              # 0.9*0 + 0.1*1
+    assert 0.0 < e < 1.0
+    # higher beta = slower to move toward `new`
+    slow = R.ema_update(0.0, 1.0, beta=0.99)
+    fast = R.ema_update(0.0, 1.0, beta=0.5)
+    assert slow < fast
+    # repeated updates converge toward a constant stream
+    v = None
+    for _ in range(500):
+        v = R.ema_update(v, 2.0, beta=0.98)
+    assert abs(v - 2.0) < 1e-3
+
+
 def test_gemini_judge_with_stub_call():
     judge = R.GeminiJudge(lambda prompt: "이 요약의 점수는 85점입니다.")
     assert judge.score("원문", "요약") == 0.85

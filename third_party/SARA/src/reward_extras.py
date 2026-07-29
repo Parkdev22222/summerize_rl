@@ -24,6 +24,22 @@ import os
 import re
 from dataclasses import dataclass
 
+
+# --------------------------------------------------------------------------- #
+# Logging helpers                                                              #
+# --------------------------------------------------------------------------- #
+def ema_update(prev, new, beta: float = 0.98):
+    """Exponential moving average for smoothing noisy per-step TensorBoard curves.
+
+    ``prev`` is the previous EMA (``None`` on the first call -> seed with ``new``);
+    higher ``beta`` = smoother/slower. Pure/stdlib so it is unit-testable without
+    torch. Logging-only: never feeds back into the reward or the gradient.
+    """
+    new = float(new)
+    if prev is None:
+        return new
+    return float(beta * float(prev) + (1.0 - beta) * new)
+
 # --------------------------------------------------------------------------- #
 # Shared text helpers (from summarize_rl/rewards.py)                            #
 # --------------------------------------------------------------------------- #
