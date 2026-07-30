@@ -137,6 +137,18 @@ GEMINI_API_KEY=... python compare_gemini.py \
 `--out`으로 예제별 요약·판정 JSONL 저장. 참고: MINE은 keyfacts(presumm)도 받지만 BASE는 보고서
 프롬프트만 본다 → "MLP 단독"이 아니라 "전체 방법 vs 순수 백본" 비교다.
 
+**gold-ROUGE 비교(로컬, API 불필요)**: 기본으로 각 예제의 MINE·BASE 요약을 **gold와
+ROUGE-1/2/Lsum**으로 재서 평균과 승률(added=R1+R2+RLsum, 학습이 최적화한 지표)을 같이 낸다.
+`--skip_judge`면 Gemini 없이 **ROUGE만** (결제/키 불필요), `--no_rouge`면 ROUGE를 뺀다.
+```bash
+# Gemini 없이 "MLP가 학습 지표(ROUGE)에서 BASE를 이기나"만 로컬로 확인
+python compare_gemini.py --skip_judge \
+    --model_name_or_path LGAI-EXAONE/... --loading_mode bf16 \
+    --dataset summarize_rl_ko --save_checkpoint_path ../runs/exaone_ko_ckpts --load_best 1
+```
+해석: MINE ROUGE > BASE인데 Gemini만 지면 **지표 불일치/디코딩 손해**, MINE ROUGE ≤ BASE면
+**학습이 안 된 것**. `Evaluator.calculate_rouge`(torchmetrics)를 재사용해 학습·검증과 같은 계산이다.
+
 ## 백본: EXAONE 3.5 Instruct (SAD head 이식)
 
 SARA의 context-aware 디코딩은 원래 fork가 **아키텍처별로 `*ForCausalLM`을 직접 수정**해

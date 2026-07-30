@@ -130,25 +130,54 @@ def judge_pair(call, source, mine, base, retries=3):
     return "tie"  # disagreement (incl. a genuine draw) or an API failure
 
 
+def rouge_scores(evaluator, pred, gold):
+    """Per-example ROUGE-1/2/Lsum F + their sum (added_results, the training's
+    model-selection metric). Empty prediction -> all zeros."""
+    if not pred or not pred.strip():
+        return {"rouge1": 0.0, "rouge2": 0.0, "rougeLsum": 0.0, "added": 0.0}
+    d = evaluator.calculate_rouge([pred], [gold])
+    r1 = float(d.get("rouge1_fmeasure", 0.0))
+    r2 = float(d.get("rouge2_fmeasure", 0.0))
+    rl = float(d.get("rougeLsum_fmeasure", 0.0))
+    return {"rouge1": r1, "rouge2": r2, "rougeLsum": rl, "added": r1 + r2 + rl}
+
+
 def build_args():
     p = argparse.ArgumentParser(
-        description="Win-rate of the trained SARA model vs the raw EXAONE backbone, judged by Gemini."
+        description="Compare the trained SARA model vs the raw EXAONE backbone: "
+                    "gold-ROUGE (local) and/or a Gemini pairwise judge."
     )
     add_model_decode_args(p)
     p.add_argument("--limit", type=int, default=0, help="cap on #test examples (0 = all)")
     p.add_argument("--gemini_model", default="gemini-2.5-flash", help="Gemini judge model id")
     p.add_argument("--gemini_temperature", type=float, default=0.0)
+    p.add_argument("--skip_judge", action="store_true",
+                   help="skip the Gemini judge -> local gold-ROUGE only (no API key needed)")
+    p.add_argument("--no_rouge", action="store_true",
+                   help="skip the local gold-ROUGE comparison")
     p.add_argument("--out", default=None, help="optional JSONL of per-example results")
     return p.parse_args()
 
 
 def main():
     args = build_args()
+    do_judge = not args.skip_judge
+    do_rouge = not args.no_rouge
+    if not do_judge and not do_rouge:
+        raise SystemExit("--skip_judge and --no_rouge together leave nothing to compare")
 
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        raise SystemExit("환경변수 GEMINI_API_KEY (또는 GOOGLE_API_KEY)를 설정하세요.")
-    judge_call = make_gemini(api_key, args.gemini_model, args.gemini_temperature)
+    judge_call = None
+    if do_judge:
+        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not api_key:
+            raise SystemExit("환경변수 GEMINI_API_KEY (또는 GOOGLE_API_KEY)를 설정하세요 "
+                             "(또는 --skip_judge 로 ROUGE만).")
+        judge_call = make_gemini(api_key, args.gemini_model, args.gemini_temperature)
+
+    evaluator = None
+    if do_rouge:
+        from eval import Evaluator  # imports torchmetrics lazily
+        evaluator = Evaluator()
 
     _, _, test_set = load_dataset(args.dataset, args.data_type)
     if not test_set:
@@ -164,46 +193,81 @@ def main():
     base_cfg.plausibility_alpha = 0.0
     device = "cuda" if _cuda_available() else "cpu"
 
-    tally = {"mine": 0, "base": 0, "tie": 0}
+    tally = {"mine": 0, "base": 0, "tie": 0}                 # Gemini judge
+    rtally = {"mine": 0, "base": 0, "tie": 0}                # gold-ROUGE (added)
+    rsum = {"mine": {"rouge1": 0.0, "rouge2": 0.0, "rougeLsum": 0.0},
+            "base": {"rouge1": 0.0, "rouge2": 0.0, "rougeLsum": 0.0}}
     rows_out = []
     for i in range(n):
         split_row = test_set[i]
-        source = split_row[0]  # full raw 원문 (the judge sees this)
+        source = split_row[0]  # full raw 원문
+        gold = split_row[1]
 
         row, meta = prepare_example(split_row, tokenizer, args)
         mine, _ = generate_summary(model, tokenizer, gen_cfg, row, args, device)
         base, _ = generate_summary(model, tokenizer, base_cfg, row, args, device, pure=True)
 
-        winner = judge_pair(judge_call, source, mine, base)
-        tally[winner] += 1
-        decided = tally["mine"] + tally["base"]
-        wr = 100.0 * tally["mine"] / decided if decided else 0.0
-        print(f"[{i + 1}/{n}] winner={winner:5s} | "
-              f"mine {tally['mine']} / base {tally['base']} / tie {tally['tie']} "
-              f"| running win-rate {wr:.1f}%")
+        rec = {"index": i, "mine": mine, "base": base, "gold": gold, "source": source}
+        line = f"[{i + 1}/{n}]"
 
-        rows_out.append({
-            "index": i, "winner": winner,
-            "mine": mine, "base": base,
-            "gold": meta["reference"], "source": source,
-        })
+        if do_rouge:
+            rm = rouge_scores(evaluator, mine, gold)
+            rb = rouge_scores(evaluator, base, gold)
+            for k in rsum["mine"]:
+                rsum["mine"][k] += rm[k]
+                rsum["base"][k] += rb[k]
+            rwin = "mine" if rm["added"] > rb["added"] else ("base" if rb["added"] > rm["added"] else "tie")
+            rtally[rwin] += 1
+            rdec = rtally["mine"] + rtally["base"]
+            rwr = 100.0 * rtally["mine"] / rdec if rdec else 0.0
+            rec["rouge_mine"], rec["rouge_base"], rec["rouge_winner"] = rm, rb, rwin
+            line += (f" ROUGE-added mine {rm['added']:.3f} / base {rb['added']:.3f} "
+                     f"-> {rwin:4s} (win {rwr:.0f}%)")
 
-    decided = tally["mine"] + tally["base"]
-    win_rate = 100.0 * tally["mine"] / decided if decided else 0.0
-    bar = "=" * 60
+        if do_judge:
+            winner = judge_pair(judge_call, source, mine, base)
+            tally[winner] += 1
+            dec = tally["mine"] + tally["base"]
+            wr = 100.0 * tally["mine"] / dec if dec else 0.0
+            rec["winner"] = winner
+            line += f" | judge {winner:5s} (win {wr:.0f}%)"
+
+        print(line)
+        rows_out.append(rec)
+
+    bar = "=" * 64
     print(f"\n{bar}")
-    print(f"판정 완료: {n} examples  (judge={args.gemini_model})")
-    print(f"MINE(EXAONE+MLP) 승 {tally['mine']}  |  BASE(순수 EXAONE) 승 {tally['base']}  |  무승부 {tally['tie']}")
-    print(f"내 방법 승률 (무승부 제외): {win_rate:.1f}%   ({tally['mine']}/{decided})")
+    print(f"완료: {n} examples")
+    if do_rouge:
+        mavg = {k: rsum["mine"][k] / n for k in rsum["mine"]}
+        bavg = {k: rsum["base"][k] / n for k in rsum["base"]}
+        rdec = rtally["mine"] + rtally["base"]
+        rwr = 100.0 * rtally["mine"] / rdec if rdec else 0.0
+        print("[gold-ROUGE] 평균 F-measure (학습이 최적화한 지표):")
+        print(f"  MINE : R1 {mavg['rouge1']:.4f}  R2 {mavg['rouge2']:.4f}  RLsum {mavg['rougeLsum']:.4f}")
+        print(f"  BASE : R1 {bavg['rouge1']:.4f}  R2 {bavg['rouge2']:.4f}  RLsum {bavg['rougeLsum']:.4f}")
+        print(f"  ROUGE 승률(added, 무승부 제외): MINE {rwr:.1f}%  "
+              f"(mine {rtally['mine']} / base {rtally['base']} / tie {rtally['tie']})")
+    if do_judge:
+        dec = tally["mine"] + tally["base"]
+        wr = 100.0 * tally["mine"] / dec if dec else 0.0
+        print(f"[Gemini judge={args.gemini_model}] 원문 기준 요약 품질:")
+        print(f"  MINE 승 {tally['mine']}  |  BASE 승 {tally['base']}  |  무승부 {tally['tie']}")
+        print(f"  내 방법 승률(무승부 제외): {wr:.1f}%   ({tally['mine']}/{dec})")
     print(bar)
 
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+        summary = {"n": n}
+        if do_rouge:
+            summary["rouge_win"] = rtally
+            summary["rouge_mine_avg"] = {k: rsum["mine"][k] / n for k in rsum["mine"]}
+            summary["rouge_base_avg"] = {k: rsum["base"][k] / n for k in rsum["base"]}
+        if do_judge:
+            summary["judge_win"] = tally
+            summary["judge_model"] = args.gemini_model
         with open(args.out, "w", encoding="utf-8") as f:
-            f.write(json.dumps({
-                "summary": {"n": n, **tally, "win_rate_excl_tie": win_rate},
-                "judge_model": args.gemini_model,
-            }, ensure_ascii=False) + "\n")
+            f.write(json.dumps({"summary": summary}, ensure_ascii=False) + "\n")
             for r in rows_out:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
         print(f"[out] per-example results -> {args.out}")
