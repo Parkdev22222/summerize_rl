@@ -75,7 +75,8 @@ def build_args():
     p.add_argument("--ablation_null_sequence", action="store_true")
     # generation (defaults mirror the eval config)
     p.add_argument("--min_new_tokens", type=int, default=30)
-    p.add_argument("--max_new_tokens", type=int, default=80)
+    p.add_argument("--max_new_tokens", type=int, default=256,
+                   help="raise if the summary is cut off mid-sentence")
     p.add_argument("--do_sample", action="store_true")
     p.add_argument("--num_beams", type=int, default=1)
     p.add_argument("--top_k", type=int, default=50)
@@ -126,11 +127,17 @@ def main():
             tokenizer.eos_token_id,
         )
 
+    # raw, untruncated source document (before pretokenize clips it to
+    # --max_input_length) so you can see the full 원문 and how much was cut.
+    raw_source = split[args.index][0]
+
     # same pipeline as the training script: truncate document, then apply template.
     # row layout after this: [templated_input, summary(gold), presumm(keyfacts), triplets]
     row = pretokenize([split[args.index]], tokenizer, args.max_input_length)[0]
+    truncated_source = row[0]
     row = [template_input_decoder(row, args.dataset)] + list(row[1:])
     templated_input, reference = row[0], row[1]
+    source_was_truncated = truncated_source.strip() != raw_source.strip()
 
     # 2) backbone + trained FC head
     print("loading model checkpoint")
@@ -211,13 +218,17 @@ def main():
         output[:, input_len:], skip_special_tokens=True, reduce_tokenization_space=True
     )[0]
 
+    n_out = output[:, input_len:].shape[1]
+    hit_cap = n_out >= args.max_new_tokens
+
     bar = "=" * 72
     print(f"\n{bar}")
     print(f"[SPLIT] {args.split}   [INDEX] {args.index} / {len(split)}")
     print(bar)
-    print(f"\n[INPUT]\n{templated_input}")
+    print(f"\n[SOURCE] (원문 원본{' — TRUNCATED to --max_input_length' if source_was_truncated else ''})\n{raw_source}")
+    print(f"\n[INPUT] (모델에 실제로 들어간 프롬프트)\n{templated_input}")
     print(f"\n[GOLD]\n{reference}")
-    print(f"\n[PRED]\n{prediction}")
+    print(f"\n[PRED] ({n_out} new tokens{' — HIT --max_new_tokens cap, likely cut off; raise it' if hit_cap else ''})\n{prediction}")
     print(f"\n{bar}")
 
 

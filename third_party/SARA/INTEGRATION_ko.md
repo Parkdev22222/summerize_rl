@@ -80,6 +80,9 @@ python single_infer.py \
 ```
 특정 스텝을 보려면 `--load_best 0 --load_ckpt_num 1100`. SAD head 하이퍼파라미터
 (`--alpha_et_hidden_size` 등)는 **학습 때와 동일하게** 줘야 가중치 shape가 맞는다.
+`[SOURCE]`(원문 원본)·`[INPUT]`(잘린 뒤 템플릿된 실제 프롬프트)·`[GOLD]`·`[PRED]`를 찍는다.
+요약이 중간에 끊기면 `--max_new_tokens`(기본 256)를, 원문이 잘리면 `--max_input_length`(기본
+1024)를 올린다. `[PRED]`에 `HIT --max_new_tokens cap` 경고가 뜨면 출력이 잘린 것.
 
 ## 백본: EXAONE 3.5 Instruct (SAD head 이식)
 
