@@ -149,7 +149,7 @@ def build_args():
     )
     add_model_decode_args(p)
     p.add_argument("--limit", type=int, default=0, help="cap on #test examples (0 = all)")
-    p.add_argument("--gemini_model", default="gemini-2.5-flash", help="Gemini judge model id")
+    p.add_argument("--gemini_model", default="gemini-3.5-flash", help="Gemini judge model id")
     p.add_argument("--gemini_temperature", type=float, default=0.0)
     p.add_argument("--skip_judge", action="store_true",
                    help="skip the Gemini judge -> local gold-ROUGE only (no API key needed)")
