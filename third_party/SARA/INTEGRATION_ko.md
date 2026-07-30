@@ -80,7 +80,20 @@ python single_infer.py \
 ```
 특정 스텝을 보려면 `--load_best 0 --load_ckpt_num 1100`. SAD head 하이퍼파라미터
 (`--alpha_et_hidden_size` 등)는 **학습 때와 동일하게** 줘야 가중치 shape가 맞는다.
-`[SOURCE]`(원문 원본)·`[INPUT]`(잘린 뒤 템플릿된 실제 프롬프트)·`[GOLD]`·`[PRED]`를 찍는다.
+`[SOURCE]`(원문 원본)·`[TRIPLETS]`·`[INPUT]`(실제 프롬프트)·`[GOLD]`·`[PRED]`를 찍는다.
+
+**main 브랜치 입력 바꾸기(`--input_mode`)**: 학습은 항상 원문(main)+keyfacts(presumm)로
+디코딩하고 triplet은 보상에만 썼다. 추론 실험용으로 main 슬롯에 무엇을 넣을지 고를 수 있다.
+- `document`(기본): 원문만 — 학습과 동일(in-distribution).
+- `document+triplets`: 원문 뒤에 `[관계 정보]`로 triplet을 붙여서.
+- `triplets`: triplet만 (원문 없이).
+
+`document+triplets`/`triplets`는 학습이 본 적 없는 **off-distribution** 입력이라 결과는 탐색용이다.
+keyfacts(presumm) 브랜치는 그대로 두며, 빼려면 `--ablation_presumm_sequence`를 함께 준다.
+```bash
+python single_infer.py ... --split test --index 0 --input_mode document+triplets
+python single_infer.py ... --split test --index 0 --input_mode triplets
+```
 요약이 중간에 끊기면 `--max_new_tokens`(기본 256)를, 원문이 잘리면 `--max_input_length`(기본
 1024)를 올린다. `[PRED]`에 `HIT --max_new_tokens cap` 경고가 뜨면 출력이 잘린 것.
 

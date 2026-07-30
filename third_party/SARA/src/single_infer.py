@@ -40,6 +40,26 @@ from utils import (
     template_input_decoder,
 )
 
+try:
+    from reward_extras import to_triplets
+except Exception:  # pragma: no cover - fall back to raw rows if helper moves
+    to_triplets = None
+
+
+def render_triplets(raw) -> str:
+    """Render KB triplets ([head, relation, tail]) as one '- head relation tail'
+    line each, for feeding into the main branch. Empty when there are none."""
+    triplets = to_triplets(raw) if to_triplets is not None else (raw or [])
+    lines = []
+    for t in triplets:
+        head = getattr(t, "head", None) or (t[0] if isinstance(t, (list, tuple)) and len(t) > 0 else "")
+        rel = getattr(t, "relation", None) or (t[1] if isinstance(t, (list, tuple)) and len(t) > 1 else "")
+        tail = getattr(t, "tail", None) or (t[2] if isinstance(t, (list, tuple)) and len(t) > 2 else "")
+        parts = [p for p in (head, rel, tail) if p]
+        if parts:
+            lines.append("- " + " ".join(parts))
+    return "\n".join(lines)
+
 
 def build_args():
     p = argparse.ArgumentParser(
@@ -51,6 +71,13 @@ def build_args():
     p.add_argument("--data_type", default="default")
     p.add_argument("--loading_mode", default="bf16")
     p.add_argument("--max_input_length", type=int, default=1024)
+    # what to put in the main branch (the [보고서] slot). Training always used the
+    # raw document; the triplet variants are off-distribution experiments.
+    p.add_argument("--input_mode", choices=["document", "document+triplets", "triplets"],
+                   default="document",
+                   help="main-branch input: 원문만 / 원문+triplet / triplet만. "
+                        "keyfacts(presumm) branch is unchanged; drop it with "
+                        "--ablation_presumm_sequence.")
     # which example to test
     p.add_argument("--split", choices=["train", "val", "test"], default="test")
     p.add_argument("--index", type=int, default=0)
@@ -134,14 +161,31 @@ def main():
     # raw, untruncated source document (before pretokenize clips it to
     # --max_input_length) so you can see the full 원문 and how much was cut.
     raw_source = split[args.index][0]
+    triplets_raw = split[args.index][3] if len(split[args.index]) > 3 else []
+    triplet_text = render_triplets(triplets_raw)
 
     # same pipeline as the training script: truncate document, then apply template.
-    # row layout after this: [templated_input, summary(gold), presumm(keyfacts), triplets]
+    # row layout after this: [truncated_doc, summary(gold), presumm(keyfacts), triplets]
     row = pretokenize([split[args.index]], tokenizer, args.max_input_length)[0]
     truncated_source = row[0]
-    row = [template_input_decoder(row, args.dataset)] + list(row[1:])
+
+    # choose what fills the main branch's [보고서] slot. keyfacts(presumm) and null
+    # branches are untouched -- only the main input changes.
+    if args.input_mode == "document":
+        doc_slot = truncated_source
+    elif args.input_mode == "triplets":
+        doc_slot = triplet_text
+        if not triplet_text.strip():
+            raise SystemExit(f"--input_mode triplets: example {args.index} has no triplets")
+    else:  # document+triplets
+        doc_slot = truncated_source
+        if triplet_text.strip():
+            doc_slot = f"{truncated_source}\n\n[관계 정보]\n{triplet_text}"
+
+    row = [template_input_decoder([doc_slot, *row[1:]], args.dataset)] + list(row[1:])
     templated_input, reference = row[0], row[1]
-    source_was_truncated = truncated_source.strip() != raw_source.strip()
+    doc_in_input = args.input_mode in ("document", "document+triplets")
+    source_was_truncated = doc_in_input and truncated_source.strip() != raw_source.strip()
 
     # 2) backbone + trained FC head
     print("loading model checkpoint")
@@ -229,9 +273,10 @@ def main():
 
     bar = "=" * 72
     print(f"\n{bar}")
-    print(f"[SPLIT] {args.split}   [INDEX] {args.index} / {len(split)}")
+    print(f"[SPLIT] {args.split}   [INDEX] {args.index} / {len(split)}   [INPUT_MODE] {args.input_mode}")
     print(bar)
     print(f"\n[SOURCE] (원문 원본{' — TRUNCATED to --max_input_length' if source_was_truncated else ''})\n{raw_source}")
+    print(f"\n[TRIPLETS] ({'in main input' if args.input_mode != 'document' else 'NOT fed to model'})\n{triplet_text or '(none)'}")
     print(f"\n[INPUT] (모델에 실제로 들어간 프롬프트)\n{templated_input}")
     print(f"\n[GOLD]\n{reference}")
     print(f"\n[PRED] ({n_out} new tokens{' — HIT --max_new_tokens cap, likely cut off; raise it' if hit_cap else ''})\n{prediction}")
