@@ -86,6 +86,10 @@ def build_args():
     p.add_argument("--context_aware_decoding_alpha", type=float, default=0.0)
     p.add_argument("--cad_full", type=float, default=1.0)
     p.add_argument("--cad_salience", type=float, default=0.0)
+    p.add_argument("--plausibility_alpha", type=float, default=0.0,
+                   help="byte-level plausibility floor: mask tokens the main branch "
+                        "gives prob < alpha*max. Fixes garbled digits/`?` from the "
+                        "contrastive tilt. 0=off (faithful to eval); try 0.1.")
     return p.parse_args()
 
 
@@ -168,6 +172,7 @@ def main():
         ablation_main_sequence=args.ablation_main_sequence,
         ablation_presumm_sequence=args.ablation_presumm_sequence,
         ablation_null_sequence=args.ablation_null_sequence,
+        plausibility_alpha=args.plausibility_alpha,
     )
 
     tok_in = tokenizer(
@@ -220,6 +225,7 @@ def main():
 
     n_out = output[:, input_len:].shape[1]
     hit_cap = n_out >= args.max_new_tokens
+    garbled = "�" in prediction  # U+FFFD replacement char = broken byte-BPE output
 
     bar = "=" * 72
     print(f"\n{bar}")
@@ -229,6 +235,9 @@ def main():
     print(f"\n[INPUT] (모델에 실제로 들어간 프롬프트)\n{templated_input}")
     print(f"\n[GOLD]\n{reference}")
     print(f"\n[PRED] ({n_out} new tokens{' — HIT --max_new_tokens cap, likely cut off; raise it' if hit_cap else ''})\n{prediction}")
+    if garbled and args.plausibility_alpha <= 0.0:
+        print("\n[!] Output contains `�` (broken byte-BPE from the contrastive tilt). "
+              "Re-run with --plausibility_alpha 0.1 to prune invalid byte continuations.")
     print(f"\n{bar}")
 
 

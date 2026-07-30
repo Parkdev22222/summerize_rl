@@ -84,6 +84,13 @@ python single_infer.py \
 요약이 중간에 끊기면 `--max_new_tokens`(기본 256)를, 원문이 잘리면 `--max_input_length`(기본
 1024)를 올린다. `[PRED]`에 `HIT --max_new_tokens cap` 경고가 뜨면 출력이 잘린 것.
 
+**숫자/글자가 `�`로 깨질 때**: SAD 결합이 `(1+gamma)*(alpha*main+beta*presumm) - gamma*null`로
+null 분포를 빼는 대조 디코딩이라, EXAONE의 바이트 레벨 BPE에서 **유효하지 않은 UTF-8 바이트
+연속 토큰**을 골라 깨진 문자가 나올 수 있다(특히 숫자). `_sad_generate`에 바이트 레벨
+plausibility floor를 추가했다(`--plausibility_alpha`, 기본 0=off라 학습/평가 디코딩은 불변).
+`--plausibility_alpha 0.1`을 주면 main(원문 기반, 항상 UTF-8 유효) 분포가 implausible하다고
+보는 토큰을 마스킹해 깨진 바이트를 잘라낸다. single_infer는 `�` 감지 시 이 옵션을 안내한다.
+
 ## 백본: EXAONE 3.5 Instruct (SAD head 이식)
 
 SARA의 context-aware 디코딩은 원래 fork가 **아키텍처별로 `*ForCausalLM`을 직접 수정**해

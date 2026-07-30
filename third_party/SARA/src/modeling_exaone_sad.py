@@ -31,6 +31,7 @@ GPU before training; see INTEGRATION_ko.md.
 
 from __future__ import annotations
 
+import math
 from types import SimpleNamespace
 
 import torch
@@ -380,6 +381,19 @@ def _sad_generate(
             combined = (1 + gamma) * (alpha * m_logits + beta * p_logits) - gamma * n_logits
         else:
             combined = m_logits
+
+        # Byte-level plausibility floor (Contrastive Decoding, Li et al. 2022).
+        # The contrastive `- gamma*null` tilt over EXAONE's byte-level BPE vocab
+        # can select invalid UTF-8 byte continuations, surfacing as garbled digits
+        # or `�`. Keep only tokens the on-source main branch deems plausible:
+        # main-branch prob >= alpha * max(main prob). The main top token always
+        # survives (log alpha < 0), so the set is never empty. alpha <= 0 (default)
+        # is a no-op, so training/eval decoding is unchanged unless a caller opts in.
+        pa = float(getattr(gc, "plausibility_alpha", 0.0) or 0.0)
+        if pa > 0.0:
+            base_logp = torch.log_softmax(m_logits, dim=-1)
+            thresh = base_logp.amax(dim=-1, keepdim=True) + math.log(pa)
+            combined = combined.masked_fill(base_logp < thresh, float("-inf"))
 
         if step < min_new and eos_id is not None:
             # clone before in-place so autograd stays valid when grad flows.
