@@ -209,9 +209,13 @@ def prepare_example(split_row, tokenizer, args):
     return row, meta
 
 
-def generate_summary(model, tokenizer, gen_cfg, row, args, device):
+def generate_summary(model, tokenizer, gen_cfg, row, args, device, pure=False):
     """Decode one prepared row with the exact branch logic of test().
-    Returns (prediction_text, num_new_tokens)."""
+
+    ``pure=True`` forces plain single-branch generation (no presumm/null branches),
+    which makes _sad_generate use combined = main logits with the FC/SAD head
+    untouched -- i.e. the raw backbone LLM, the pure-LLM baseline. Returns
+    (prediction_text, num_new_tokens)."""
     templated_input = row[0]
     tok_in = tokenizer(
         [templated_input], return_tensors="pt", max_length=1800,
@@ -220,7 +224,13 @@ def generate_summary(model, tokenizer, gen_cfg, row, args, device):
     input_len = tok_in.input_ids.shape[1]
 
     with torch.no_grad():
-        if args.context_aware_decoding_alpha >= 0.0:  # full + salience + prompt
+        if pure:  # raw backbone: no SAD combination, no MLP
+            output = model.generate(
+                input_ids=tok_in.input_ids.to(device),
+                attention_mask=tok_in.attention_mask.to(device),
+                generation_config=gen_cfg,
+            )
+        elif args.context_aware_decoding_alpha >= 0.0:  # full + salience + prompt
             tok_pre = tokenizer(
                 [presumm_input_decoder(row, args.dataset)], return_tensors="pt",
                 max_length=1800, padding=True, truncation=True,

@@ -104,13 +104,15 @@ plausibility floor를 추가했다(`--plausibility_alpha`, 기본 0=off라 학�
 `--plausibility_alpha 0.1`을 주면 main(원문 기반, 항상 UTF-8 유효) 분포가 implausible하다고
 보는 토큰을 마스킹해 깨진 바이트를 잘라낸다. single_infer는 `�` 감지 시 이 옵션을 안내한다.
 
-## 순수 LLM(Gemini) vs 내 방법 승률 (compare_gemini.py)
-테스트셋 각 예제에서 같은 원문을 두 가지로 요약해 Gemini가 어느 쪽이 원문을 더 잘
-요약했는지 판정하고 승률을 낸다. single_infer의 모델 로딩·디코딩 함수를 그대로 재사용한다.
-- **MINE**: 학습된 SARA 모델(LLM+MLP, FC 가중치) — single_infer와 동일 디코딩.
-- **GEMINI**: 순수 LLM 베이스라인 — Gemini API가 **동일 지시문**으로 원문을 요약(정책·CAD 없음).
-- **판정**: 각 쌍을 **후보 순서를 바꿔 두 번** 물어, 두 순서가 일치할 때만 승패 인정(불일치=무승부)
-  → 위치 편향 상쇄. 승률 = MINE승 / (MINE승+GEMINI승), 무승부 제외.
+## 순수 EXAONE vs 내 방법 승률 (compare_gemini.py)
+두 요약 모두 **여기서 올리는 같은 로컬 EXAONE**에서 나온다. 차이는 학습된 MLP뿐이다.
+Gemini는 요약이 아니라 **심판**만 한다. single_infer의 모델 로딩·디코딩 함수를 그대로 재사용한다.
+- **MINE**: EXAONE + 학습된 SAD/FC head, 3-branch context-aware 디코딩.
+- **BASE**: 순수 EXAONE — 같은 프롬프트, 단일 브랜치 일반 생성(MLP·CAD 없음). `presumm`/`null`을
+  안 넣으면 `_sad_generate`가 `combined=main`으로 떨어져 FC head가 개입하지 않는다(=raw 백본).
+- **판정(Gemini)**: 각 쌍을 **후보 순서를 바꿔 두 번** 물어, 두 순서가 일치할 때만 승패 인정
+  (불일치=무승부) → 위치 편향 상쇄. 두 요약 다 Gemini 것이 아니므로 자기선호 편향도 없다.
+  승률 = MINE승 / (MINE승+BASE승), 무승부 제외.
 ```bash
 GEMINI_API_KEY=... python compare_gemini.py \
     --model_name_or_path LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct --loading_mode bf16 \
@@ -119,9 +121,8 @@ GEMINI_API_KEY=... python compare_gemini.py \
     --plausibility_alpha 0.1 --out ../runs/compare_gemini.jsonl
 ```
 `pip install google-genai`(또는 `google-generativeai`) 필요. `--limit N`으로 앞 N개만,
-`--out`으로 예제별 요약·판정 JSONL 저장. 주의: (1) Gemini가 자기 요약을 채점하므로 자기선호
-편향 가능 → `--judge_model`로 다른 모델 지정 가능. (2) MINE은 `--max_input_length`로 원문이
-잘리지만 GEMINI는 전체 원문을 봄 → 공정 비교하려면 `--max_input_length`를 올린다.
+`--out`으로 예제별 요약·판정 JSONL 저장. 참고: MINE은 keyfacts(presumm)도 받지만 BASE는 보고서
+프롬프트만 본다 → "MLP 단독"이 아니라 "전체 방법 vs 순수 백본" 비교다.
 
 ## 백본: EXAONE 3.5 Instruct (SAD head 이식)
 
