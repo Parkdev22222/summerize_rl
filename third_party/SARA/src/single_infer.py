@@ -61,10 +61,8 @@ def render_triplets(raw) -> str:
     return "\n".join(lines)
 
 
-def build_args():
-    p = argparse.ArgumentParser(
-        description="Single-example SARA inference from saved FC weights."
-    )
+def add_model_decode_args(p):
+    """Model-loading + decoding args shared by single_infer and compare_gemini."""
     # data / backbone
     p.add_argument("--model_name_or_path", required=True)
     p.add_argument("--dataset", default="summarize_rl_ko")
@@ -78,9 +76,6 @@ def build_args():
                    help="main-branch input: 원문만 / 원문+triplet / triplet만. "
                         "keyfacts(presumm) branch is unchanged; drop it with "
                         "--ablation_presumm_sequence.")
-    # which example to test
-    p.add_argument("--split", choices=["train", "val", "test"], default="test")
-    p.add_argument("--index", type=int, default=0)
     # checkpoint (FC weights only)
     p.add_argument("--save_checkpoint_path", required=True,
                    help="dir where training wrote model-*_fc_layers.pth")
@@ -117,77 +112,31 @@ def build_args():
                    help="byte-level plausibility floor: mask tokens the main branch "
                         "gives prob < alpha*max. Fixes garbled digits/`?` from the "
                         "contrastive tilt. 0=off (faithful to eval); try 0.1.")
+    return p
+
+
+def build_args():
+    p = argparse.ArgumentParser(
+        description="Single-example SARA inference from saved FC weights."
+    )
+    add_model_decode_args(p)
+    # which example to test
+    p.add_argument("--split", choices=["train", "val", "test"], default="test")
+    p.add_argument("--index", type=int, default=0)
     return p.parse_args()
 
 
-def load_fc_weights(model, args):
-    """Load the three trained FC state_dicts into the SAD head (frozen backbone)."""
-    tag = "best" if args.load_best else args.load_ckpt_num
-    if tag is None:
-        raise SystemExit("--load_best 0 requires --load_ckpt_num <iter>")
-    fc_path = os.path.join(args.save_checkpoint_path, f"model-{tag}_fc_layers.pth")
-    if not os.path.isfile(fc_path):
-        raise SystemExit(f"checkpoint not found: {fc_path}")
-    sd = torch.load(fc_path, map_location="cpu")
-    model.my_all_f.load_state_dict(sd["my_all_f"])
-    model.my_all_f1.load_state_dict(sd["my_all_f1"])
-    model.my_f.load_state_dict(sd["my_f"])
-    print(f"[ckpt] loaded FC weights <- {fc_path}")
-
-
-def main():
-    args = build_args()
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # 1) data -- same loader as training/eval
-    train_set, val_set, test_set = load_dataset(args.dataset, args.data_type)
-    split = {"train": train_set, "val": val_set, "test": test_set}[args.split]
-    if not split:
-        raise SystemExit(f"split '{args.split}' is empty")
-    if not 0 <= args.index < len(split):
-        raise SystemExit(
-            f"index {args.index} out of range [0, {len(split)}) for split '{args.split}'"
-        )
-
-    tokenizer = AutoTokenizer.from_pretrained(
+def load_tokenizer(args):
+    tok = AutoTokenizer.from_pretrained(
         args.model_name_or_path, padding_side="left", trust_remote_code=True
     )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token, tokenizer.pad_token_id = (
-            tokenizer.eos_token,
-            tokenizer.eos_token_id,
-        )
+    if tok.pad_token is None:
+        tok.pad_token, tok.pad_token_id = tok.eos_token, tok.eos_token_id
+    return tok
 
-    # raw, untruncated source document (before pretokenize clips it to
-    # --max_input_length) so you can see the full 원문 and how much was cut.
-    raw_source = split[args.index][0]
-    triplets_raw = split[args.index][3] if len(split[args.index]) > 3 else []
-    triplet_text = render_triplets(triplets_raw)
 
-    # same pipeline as the training script: truncate document, then apply template.
-    # row layout after this: [truncated_doc, summary(gold), presumm(keyfacts), triplets]
-    row = pretokenize([split[args.index]], tokenizer, args.max_input_length)[0]
-    truncated_source = row[0]
-
-    # choose what fills the main branch's [보고서] slot. keyfacts(presumm) and null
-    # branches are untouched -- only the main input changes.
-    if args.input_mode == "document":
-        doc_slot = truncated_source
-    elif args.input_mode == "triplets":
-        doc_slot = triplet_text
-        if not triplet_text.strip():
-            raise SystemExit(f"--input_mode triplets: example {args.index} has no triplets")
-    else:  # document+triplets
-        doc_slot = truncated_source
-        if triplet_text.strip():
-            doc_slot = f"{truncated_source}\n\n[관계 정보]\n{triplet_text}"
-
-    row = [template_input_decoder([doc_slot, *row[1:]], args.dataset)] + list(row[1:])
-    templated_input, reference = row[0], row[1]
-    doc_in_input = args.input_mode in ("document", "document+triplets")
-    source_was_truncated = doc_in_input and truncated_source.strip() != raw_source.strip()
-
-    # 2) backbone + trained FC head
+def load_model(args):
+    """Backbone + trained FC head, in eval mode. Returns the model."""
     print("loading model checkpoint")
     model = configure_model_loading(args)
     load_fc_weights(model, args)
@@ -195,9 +144,12 @@ def main():
         from test_performance_decoder_new_fc import convert_my_layers_to_fp32
         model = convert_my_layers_to_fp32(model)
     model.eval()
+    return model
 
-    # 3) generation config -- same fields the eval path builds
-    gen_cfg = GenerationConfig(
+
+def build_gen_config(args, tokenizer):
+    """GenerationConfig with the same fields the eval path builds."""
+    return GenerationConfig(
         min_new_tokens=args.min_new_tokens,
         max_new_tokens=args.max_new_tokens,
         early_stopping=False,
@@ -219,13 +171,54 @@ def main():
         plausibility_alpha=args.plausibility_alpha,
     )
 
+
+def prepare_example(split_row, tokenizer, args):
+    """Build the branch-list row + display meta for one dataset row.
+
+    Mirrors the training/eval pipeline (truncate -> template) and applies
+    --input_mode to the main branch's [보고서] slot. Returns (row, meta) where
+    ``row`` = [templated_input, summary, presumm(keyfacts), triplets] and ``meta``
+    carries raw_source / triplet_text / templated_input / reference / truncation.
+    """
+    raw_source = split_row[0]
+    triplet_text = render_triplets(split_row[3] if len(split_row) > 3 else [])
+
+    row = pretokenize([split_row], tokenizer, args.max_input_length)[0]
+    truncated_source = row[0]
+
+    if args.input_mode == "document":
+        doc_slot = truncated_source
+    elif args.input_mode == "triplets":
+        if not triplet_text.strip():
+            raise SystemExit("--input_mode triplets: example has no triplets")
+        doc_slot = triplet_text
+    else:  # document+triplets
+        doc_slot = truncated_source
+        if triplet_text.strip():
+            doc_slot = f"{truncated_source}\n\n[관계 정보]\n{triplet_text}"
+
+    row = [template_input_decoder([doc_slot, *row[1:]], args.dataset)] + list(row[1:])
+    doc_in_input = args.input_mode in ("document", "document+triplets")
+    meta = {
+        "raw_source": raw_source,
+        "triplet_text": triplet_text,
+        "templated_input": row[0],
+        "reference": row[1],
+        "source_was_truncated": doc_in_input and truncated_source.strip() != raw_source.strip(),
+    }
+    return row, meta
+
+
+def generate_summary(model, tokenizer, gen_cfg, row, args, device):
+    """Decode one prepared row with the exact branch logic of test().
+    Returns (prediction_text, num_new_tokens)."""
+    templated_input = row[0]
     tok_in = tokenizer(
         [templated_input], return_tensors="pt", max_length=1800,
         padding=True, truncation=True,
     )
     input_len = tok_in.input_ids.shape[1]
 
-    # 4) decode -- identical branch logic to test()
     with torch.no_grad():
         if args.context_aware_decoding_alpha >= 0.0:  # full + salience + prompt
             tok_pre = tokenizer(
@@ -266,8 +259,45 @@ def main():
     prediction = tokenizer.batch_decode(
         output[:, input_len:], skip_special_tokens=True, reduce_tokenization_space=True
     )[0]
+    return prediction, output[:, input_len:].shape[1]
 
-    n_out = output[:, input_len:].shape[1]
+
+def load_fc_weights(model, args):
+    """Load the three trained FC state_dicts into the SAD head (frozen backbone)."""
+    tag = "best" if args.load_best else args.load_ckpt_num
+    if tag is None:
+        raise SystemExit("--load_best 0 requires --load_ckpt_num <iter>")
+    fc_path = os.path.join(args.save_checkpoint_path, f"model-{tag}_fc_layers.pth")
+    if not os.path.isfile(fc_path):
+        raise SystemExit(f"checkpoint not found: {fc_path}")
+    sd = torch.load(fc_path, map_location="cpu")
+    model.my_all_f.load_state_dict(sd["my_all_f"])
+    model.my_all_f1.load_state_dict(sd["my_all_f1"])
+    model.my_f.load_state_dict(sd["my_f"])
+    print(f"[ckpt] loaded FC weights <- {fc_path}")
+
+
+def main():
+    args = build_args()
+
+    # 1) data -- same loader as training/eval
+    train_set, val_set, test_set = load_dataset(args.dataset, args.data_type)
+    split = {"train": train_set, "val": val_set, "test": test_set}[args.split]
+    if not split:
+        raise SystemExit(f"split '{args.split}' is empty")
+    if not 0 <= args.index < len(split):
+        raise SystemExit(
+            f"index {args.index} out of range [0, {len(split)}) for split '{args.split}'"
+        )
+
+    tokenizer = load_tokenizer(args)
+    row, meta = prepare_example(split[args.index], tokenizer, args)
+
+    model = load_model(args)
+    gen_cfg = build_gen_config(args, tokenizer)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    prediction, n_out = generate_summary(model, tokenizer, gen_cfg, row, args, device)
+
     hit_cap = n_out >= args.max_new_tokens
     garbled = "�" in prediction  # U+FFFD replacement char = broken byte-BPE output
 
@@ -275,11 +305,14 @@ def main():
     print(f"\n{bar}")
     print(f"[SPLIT] {args.split}   [INDEX] {args.index} / {len(split)}   [INPUT_MODE] {args.input_mode}")
     print(bar)
-    print(f"\n[SOURCE] (원문 원본{' — TRUNCATED to --max_input_length' if source_was_truncated else ''})\n{raw_source}")
-    print(f"\n[TRIPLETS] ({'in main input' if args.input_mode != 'document' else 'NOT fed to model'})\n{triplet_text or '(none)'}")
-    print(f"\n[INPUT] (모델에 실제로 들어간 프롬프트)\n{templated_input}")
-    print(f"\n[GOLD]\n{reference}")
-    print(f"\n[PRED] ({n_out} new tokens{' — HIT --max_new_tokens cap, likely cut off; raise it' if hit_cap else ''})\n{prediction}")
+    trunc = " — TRUNCATED to --max_input_length" if meta["source_was_truncated"] else ""
+    print(f"\n[SOURCE] (원문 원본{trunc})\n{meta['raw_source']}")
+    fed = "in main input" if args.input_mode != "document" else "NOT fed to model"
+    print(f"\n[TRIPLETS] ({fed})\n{meta['triplet_text'] or '(none)'}")
+    print(f"\n[INPUT] (모델에 실제로 들어간 프롬프트)\n{meta['templated_input']}")
+    print(f"\n[GOLD]\n{meta['reference']}")
+    cap = " — HIT --max_new_tokens cap, likely cut off; raise it" if hit_cap else ""
+    print(f"\n[PRED] ({n_out} new tokens{cap})\n{prediction}")
     if garbled and args.plausibility_alpha <= 0.0:
         print("\n[!] Output contains `�` (broken byte-BPE from the contrastive tilt). "
               "Re-run with --plausibility_alpha 0.1 to prune invalid byte continuations.")

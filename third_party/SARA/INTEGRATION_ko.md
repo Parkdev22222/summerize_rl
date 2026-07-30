@@ -104,6 +104,25 @@ plausibility floor를 추가했다(`--plausibility_alpha`, 기본 0=off라 학�
 `--plausibility_alpha 0.1`을 주면 main(원문 기반, 항상 UTF-8 유효) 분포가 implausible하다고
 보는 토큰을 마스킹해 깨진 바이트를 잘라낸다. single_infer는 `�` 감지 시 이 옵션을 안내한다.
 
+## 순수 LLM(Gemini) vs 내 방법 승률 (compare_gemini.py)
+테스트셋 각 예제에서 같은 원문을 두 가지로 요약해 Gemini가 어느 쪽이 원문을 더 잘
+요약했는지 판정하고 승률을 낸다. single_infer의 모델 로딩·디코딩 함수를 그대로 재사용한다.
+- **MINE**: 학습된 SARA 모델(LLM+MLP, FC 가중치) — single_infer와 동일 디코딩.
+- **GEMINI**: 순수 LLM 베이스라인 — Gemini API가 **동일 지시문**으로 원문을 요약(정책·CAD 없음).
+- **판정**: 각 쌍을 **후보 순서를 바꿔 두 번** 물어, 두 순서가 일치할 때만 승패 인정(불일치=무승부)
+  → 위치 편향 상쇄. 승률 = MINE승 / (MINE승+GEMINI승), 무승부 제외.
+```bash
+GEMINI_API_KEY=... python compare_gemini.py \
+    --model_name_or_path LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct --loading_mode bf16 \
+    --dataset summarize_rl_ko \
+    --save_checkpoint_path ../runs/exaone_ko_ckpts --load_best 1 \
+    --plausibility_alpha 0.1 --out ../runs/compare_gemini.jsonl
+```
+`pip install google-genai`(또는 `google-generativeai`) 필요. `--limit N`으로 앞 N개만,
+`--out`으로 예제별 요약·판정 JSONL 저장. 주의: (1) Gemini가 자기 요약을 채점하므로 자기선호
+편향 가능 → `--judge_model`로 다른 모델 지정 가능. (2) MINE은 `--max_input_length`로 원문이
+잘리지만 GEMINI는 전체 원문을 봄 → 공정 비교하려면 `--max_input_length`를 올린다.
+
 ## 백본: EXAONE 3.5 Instruct (SAD head 이식)
 
 SARA의 context-aware 디코딩은 원래 fork가 **아키텍처별로 `*ForCausalLM`을 직접 수정**해
