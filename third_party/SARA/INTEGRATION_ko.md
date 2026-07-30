@@ -47,6 +47,19 @@ python test_performance_decoder_new_fc.py \
 ```
 judge를 켜면(`--judge_weight>0`) 시작 시 `[judge] ENABLED via local EXAONE backbone`이 뜬다.
 
+**입력에 triplet 포함해서 학습(`--input_mode`)**: 기본은 `document`(원문만, 기존과 동일).
+`--input_mode document+triplets`를 주면 학습·검증 모두 main 브랜치 [보고서] 슬롯에 원문 뒤로
+`[관계 정보]`로 triplet을 붙여 넣는다(`triplets`면 triplet만). train/val/test에 **일괄 적용**되어
+학습·평가 입력이 일치한다. keyfacts(presumm)·null 브랜치는 그대로. triplet은 여전히 보상
+(`--triplet_coverage_weight`)에도 쓰이므로, 이 옵션은 triplet을 **입력으로도** 넣는 것.
+```bash
+python test_performance_decoder_new_fc.py --do_train --dataset summarize_rl_ko \
+    --input_mode document+triplets ...   # 원문+triplet로 학습
+```
+⚠️ 이렇게 학습했으면 추론/비교도 **같은 `--input_mode`**로 해야 한다(single_infer.py,
+compare_gemini.py 모두 `--input_mode` 지원). 렌더 형식은 학습·추론이 `reward_extras.main_input_slot`
+하나를 공유하므로 어긋나지 않는다.
+
 ## TensorBoard로 성능 보기
 SARA 원본엔 TensorBoard가 없어 추가했다. `--tensorboard_logdir <경로>`를 주면 매 학습 스텝마다
 아래 스칼라를 기록한다(비우면 비활성).

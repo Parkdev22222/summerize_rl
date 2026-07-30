@@ -439,6 +439,12 @@ if __name__ == "__main__":
     parser.add_argument("--flash_attention", action="store_true")
     parser.add_argument("--dataset", type=str, default="xsum")
     parser.add_argument("--data_type", type=str, default="len10_notriblock")
+    parser.add_argument("--input_mode", type=str, default="document",
+                        choices=["document", "document+triplets", "triplets"],
+                        help="what fills the main branch's report slot at train AND "
+                             "eval time: 원문만 / 원문+triplet / triplet만. Applies to "
+                             "train/val/test so the model is trained and scored on the "
+                             "same input. keyfacts(presumm) branch is unchanged.")
     parser.add_argument("--num_samples", type=int, default=100000)
     parser.add_argument("--max_input_length", type=int, default=1024)
     parser.add_argument("--loading_mode", type=str, default="fp32")
@@ -600,10 +606,23 @@ if __name__ == "__main__":
             all_test_set = pretokenize(test_set[:args.num_samples], tokenizer, args.max_input_length)
         test_set = pretokenize(test_set[:args.num_samples], tokenizer, args.max_input_length)
 
-    # keep any trailing row elements (e.g. row[3]=triplets) so they reach the reward
-    train_set = [[template_input_decoder(row, args.dataset)] + list(row[1:]) for row in train_set]
-    test_set = [[template_input_decoder(row, args.dataset)] + list(row[1:]) for row in test_set]
-    all_test_set = [[template_input_decoder(row, args.dataset)] + list(row[1:]) for row in all_test_set]
+    # keep any trailing row elements (e.g. row[3]=triplets) so they reach the reward.
+    # --input_mode controls what fills the main branch's report slot (원문 /
+    # 원문+triplet / triplet만); with the default "document" this is byte-identical
+    # to the original template(row). Applied to train AND eval so they match.
+    from reward_extras import main_input_slot
+
+    def _templated(rows):
+        out = []
+        for row in rows:
+            triplets = row[3] if len(row) > 3 else []
+            doc_slot = main_input_slot(row[0], triplets, args.input_mode)
+            out.append([template_input_decoder([doc_slot, *row[1:]], args.dataset)] + list(row[1:]))
+        return out
+
+    train_set = _templated(train_set)
+    test_set = _templated(test_set)
+    all_test_set = _templated(all_test_set)
     
     print('loading model checkpoint')
     model = configure_model_loading(args)

@@ -40,25 +40,9 @@ from utils import (
     template_input_decoder,
 )
 
-try:
-    from reward_extras import to_triplets
-except Exception:  # pragma: no cover - fall back to raw rows if helper moves
-    to_triplets = None
-
-
-def render_triplets(raw) -> str:
-    """Render KB triplets ([head, relation, tail]) as one '- head relation tail'
-    line each, for feeding into the main branch. Empty when there are none."""
-    triplets = to_triplets(raw) if to_triplets is not None else (raw or [])
-    lines = []
-    for t in triplets:
-        head = getattr(t, "head", None) or (t[0] if isinstance(t, (list, tuple)) and len(t) > 0 else "")
-        rel = getattr(t, "relation", None) or (t[1] if isinstance(t, (list, tuple)) and len(t) > 1 else "")
-        tail = getattr(t, "tail", None) or (t[2] if isinstance(t, (list, tuple)) and len(t) > 2 else "")
-        parts = [p for p in (head, rel, tail) if p]
-        if parts:
-            lines.append("- " + " ".join(parts))
-    return "\n".join(lines)
+# Shared with training (test_performance_decoder_new_fc) so the main-branch input
+# is built identically at train and inference time.
+from reward_extras import main_input_slot, render_triplets
 
 
 def add_model_decode_args(p):
@@ -181,21 +165,17 @@ def prepare_example(split_row, tokenizer, args):
     carries raw_source / triplet_text / templated_input / reference / truncation.
     """
     raw_source = split_row[0]
-    triplet_text = render_triplets(split_row[3] if len(split_row) > 3 else [])
+    triplets_raw = split_row[3] if len(split_row) > 3 else []
+    triplet_text = render_triplets(triplets_raw)
 
     row = pretokenize([split_row], tokenizer, args.max_input_length)[0]
     truncated_source = row[0]
 
-    if args.input_mode == "document":
-        doc_slot = truncated_source
-    elif args.input_mode == "triplets":
-        if not triplet_text.strip():
-            raise SystemExit("--input_mode triplets: example has no triplets")
-        doc_slot = triplet_text
-    else:  # document+triplets
-        doc_slot = truncated_source
-        if triplet_text.strip():
-            doc_slot = f"{truncated_source}\n\n[관계 정보]\n{triplet_text}"
+    # same main-branch construction as training (reward_extras.main_input_slot)
+    try:
+        doc_slot = main_input_slot(truncated_source, triplets_raw, args.input_mode)
+    except ValueError as e:
+        raise SystemExit(str(e))
 
     row = [template_input_decoder([doc_slot, *row[1:]], args.dataset)] + list(row[1:])
     doc_in_input = args.input_mode in ("document", "document+triplets")

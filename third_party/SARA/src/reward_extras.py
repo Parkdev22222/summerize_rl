@@ -92,6 +92,43 @@ def to_triplets(raw: object) -> list[Triplet]:
     return out
 
 
+def render_triplets(raw: object) -> str:
+    """Render KB triplets ([head, relation, tail]) as '- head relation tail' lines.
+
+    Pure/stdlib so both training (test_performance_decoder_new_fc) and inference
+    (single_infer) can put triplets into the main branch identically. Empty when
+    there are no triplets.
+    """
+    lines = []
+    for t in to_triplets(raw):
+        parts = [p for p in (t.head, t.relation, t.tail) if p]
+        if parts:
+            lines.append("- " + " ".join(parts))
+    return "\n".join(lines)
+
+
+def main_input_slot(document: str, triplets_raw: object, input_mode: str) -> str:
+    """What fills the main branch's document slot for a given --input_mode.
+
+    Shared by training and inference so the two never drift:
+      * document          -> the report only (in-distribution / default)
+      * document+triplets -> report, then rendered triplets under [관계 정보]
+      * triplets          -> triplets only (no report)
+    """
+    triplet_text = render_triplets(triplets_raw)
+    if input_mode == "document":
+        return document
+    if input_mode == "triplets":
+        if not triplet_text.strip():
+            raise ValueError("input_mode 'triplets' but example has no triplets")
+        return triplet_text
+    if input_mode == "document+triplets":
+        if triplet_text.strip():
+            return f"{document}\n\n[관계 정보]\n{triplet_text}"
+        return document
+    raise ValueError(f"unknown input_mode: {input_mode!r}")
+
+
 # --------------------------------------------------------------------------- #
 # 1. Triplet coverage (from summarize_rl/rewards.py: triplet_coverage)          #
 # --------------------------------------------------------------------------- #
