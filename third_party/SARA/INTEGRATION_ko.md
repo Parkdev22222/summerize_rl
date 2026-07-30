@@ -140,6 +140,9 @@ GEMINI_API_KEY=... python compare_gemini.py \
 **gold-ROUGE 비교(로컬, API 불필요)**: 기본으로 각 예제의 MINE·BASE 요약을 **gold와
 ROUGE-1/2/Lsum**으로 재서 평균과 승률(added=R1+R2+RLsum, 학습이 최적화한 지표)을 같이 낸다.
 `--skip_judge`면 Gemini 없이 **ROUGE만** (결제/키 불필요), `--no_rouge`면 ROUGE를 뺀다.
+`--out result.json`을 주면 **전체 테스트셋**(기본 `--limit 0`)을 단일 JSON으로 저장한다:
+`{"summary":..., "results":[{"source"(원문), "llm_summary"(순수 LLM), "llm_mlp_summary"(LLM+MLP),
+"gold", rouge_*, *_winner}, ...]}`.
 ```bash
 # Gemini 없이 "MLP가 학습 지표(ROUGE)에서 BASE를 이기나"만 로컬로 확인
 python compare_gemini.py --skip_judge \

@@ -207,7 +207,15 @@ def main():
         mine, _ = generate_summary(model, tokenizer, gen_cfg, row, args, device)
         base, _ = generate_summary(model, tokenizer, base_cfg, row, args, device, pure=True)
 
-        rec = {"index": i, "mine": mine, "base": base, "gold": gold, "source": source}
+        # clear, self-describing keys: 원문 / 순수 LLM 요약 / LLM+MLP 요약
+        rec = {
+            "index": i,
+            "source": source,            # 원문
+            "gold": gold,                # 정답 요약 (참고용)
+            "llm_summary": base,         # 순수 LLM (vanilla EXAONE)
+            "llm_mlp_summary": mine,     # LLM + MLP (SARA)
+        }
+        _label = {"mine": "llm_mlp", "base": "llm", "tie": "tie"}
         line = f"[{i + 1}/{n}]"
 
         if do_rouge:
@@ -220,17 +228,19 @@ def main():
             rtally[rwin] += 1
             rdec = rtally["mine"] + rtally["base"]
             rwr = 100.0 * rtally["mine"] / rdec if rdec else 0.0
-            rec["rouge_mine"], rec["rouge_base"], rec["rouge_winner"] = rm, rb, rwin
-            line += (f" ROUGE-added mine {rm['added']:.3f} / base {rb['added']:.3f} "
-                     f"-> {rwin:4s} (win {rwr:.0f}%)")
+            rec["rouge_llm_mlp"] = rm
+            rec["rouge_llm"] = rb
+            rec["rouge_winner"] = _label[rwin]
+            line += (f" ROUGE-added mlp {rm['added']:.3f} / llm {rb['added']:.3f} "
+                     f"-> {_label[rwin]:7s} (win {rwr:.0f}%)")
 
         if do_judge:
             winner = judge_pair(judge_call, source, mine, base)
             tally[winner] += 1
             dec = tally["mine"] + tally["base"]
             wr = 100.0 * tally["mine"] / dec if dec else 0.0
-            rec["winner"] = winner
-            line += f" | judge {winner:5s} (win {wr:.0f}%)"
+            rec["judge_winner"] = _label[winner]
+            line += f" | judge {_label[winner]:7s} (win {wr:.0f}%)"
 
         print(line)
         rows_out.append(rec)
@@ -257,20 +267,27 @@ def main():
     print(bar)
 
     if args.out:
-        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-        summary = {"n": n}
+        out_dir = os.path.dirname(os.path.abspath(args.out))
+        os.makedirs(out_dir, exist_ok=True)
+        summary = {
+            "n": n,
+            "dataset": args.dataset,
+            "input_mode": args.input_mode,
+            "legend": {"llm_summary": "순수 LLM (vanilla EXAONE)",
+                       "llm_mlp_summary": "LLM + MLP (SARA)"},
+        }
         if do_rouge:
-            summary["rouge_win"] = rtally
-            summary["rouge_mine_avg"] = {k: rsum["mine"][k] / n for k in rsum["mine"]}
-            summary["rouge_base_avg"] = {k: rsum["base"][k] / n for k in rsum["base"]}
+            summary["rouge_win"] = {"llm_mlp": rtally["mine"], "llm": rtally["base"], "tie": rtally["tie"]}
+            summary["rouge_llm_mlp_avg"] = {k: rsum["mine"][k] / n for k in rsum["mine"]}
+            summary["rouge_llm_avg"] = {k: rsum["base"][k] / n for k in rsum["base"]}
         if do_judge:
-            summary["judge_win"] = tally
+            summary["judge_win"] = {"llm_mlp": tally["mine"], "llm": tally["base"], "tie": tally["tie"]}
             summary["judge_model"] = args.gemini_model
+        # single valid JSON: {summary, results:[...]}
         with open(args.out, "w", encoding="utf-8") as f:
-            f.write(json.dumps({"summary": summary}, ensure_ascii=False) + "\n")
-            for r in rows_out:
-                f.write(json.dumps(r, ensure_ascii=False) + "\n")
-        print(f"[out] per-example results -> {args.out}")
+            json.dump({"summary": summary, "results": rows_out}, f,
+                      ensure_ascii=False, indent=2)
+        print(f"[out] full results ({n} examples) -> {args.out}")
 
 
 def _cuda_available():
