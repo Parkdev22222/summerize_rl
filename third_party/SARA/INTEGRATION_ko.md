@@ -66,6 +66,21 @@ tensorboard --logdir third_party/SARA/runs
 `reward/weighted_mean`이 우상향하면 정책(FC 가중치)이 더 나은 요약을 뽑도록 학습되는 것이다.
 `train/loss`는 advantage·부호 때문에 0 근처를 오갈 수 있으니 품질 추세는 `reward/*`로 본다.
 
+## 한 건만 추론해 실제 출력 보기 (single_infer.py)
+학습이 저장한 FC 가중치(`model-best_fc_layers.pth`)만 불러, train/val/test 스플릿에서
+**인덱스로 한 예제만** 골라 실제 요약 텍스트(`[INPUT]/[GOLD]/[PRED]`)를 찍는다. 학습/검증과
+동일한 파이프라인(`pretokenize→template→SAD generate`)이라 `val/*`가 채점하는 것과 같은 디코딩이다.
+```bash
+cd third_party/SARA/src
+python single_infer.py \
+    --model_name_or_path LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct --loading_mode bf16 \
+    --dataset summarize_rl_ko \
+    --save_checkpoint_path ../runs/exaone_ko_ckpts --load_best 1 \
+    --split test --index 0
+```
+특정 스텝을 보려면 `--load_best 0 --load_ckpt_num 1100`. SAD head 하이퍼파라미터
+(`--alpha_et_hidden_size` 등)는 **학습 때와 동일하게** 줘야 가중치 shape가 맞는다.
+
 ## 백본: EXAONE 3.5 Instruct (SAD head 이식)
 
 SARA의 context-aware 디코딩은 원래 fork가 **아키텍처별로 `*ForCausalLM`을 직접 수정**해
