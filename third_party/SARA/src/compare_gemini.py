@@ -104,9 +104,13 @@ _SCORE_GUIDE = (
     "아래 [요약]이 [원문]을 얼마나 잘 요약했는지 세 항목을 각각 1~5점으로 채점하라 "
     "(5=매우 우수, 1=매우 미흡).\n"
     "채점 항목:\n"
-    "- accuracy (정확성, 가장 중요): 원문에 없는 부대·장비·사건·수치를 지어냈거나(환각), "
-    "장비 수·총 병력·부상자/사망자 등 수치를 원문과 다르게 적었으면 강하게 감점한다. "
-    "그런 오류가 하나라도 있으면 1~2점, 전혀 없고 정확하면 5점.\n"
+    "- accuracy (정확성, 가장 중요): 아래 오류를 강하게 감점한다.\n"
+    "    · 환각: 원문에 없는 부대·장비·사건·수치를 지어냄.\n"
+    "    · 무기체계 누락: 원문에 명시된 각 부대의 보유 무기체계(예: 박격포·기관총·무반동총·"
+    "대전차미사일·전차·장갑차·자주포·공격헬기 등)를 요약에서 빠뜨림.\n"
+    "    · 수치 오류/오기입: 장비 수량·총 병력·부상자/사망자 등 수치를 원문과 다르게 적거나 "
+    "잘못 옮겨 적음.\n"
+    "  위 오류가 하나라도 있으면 1~2점, 전혀 없고 무기체계·수치가 원문과 정확히 일치하면 5점.\n"
     "- coverage (누락): 원문의 중요한 상황·조치·건의 등 핵심 문장을 빠짐없이 담았는가. "
     "핵심 누락이 많을수록 낮고, 누락이 없으면 5점.\n"
     "- brevity (간결성): 군더더기 없이 핵심만 명료하게 표현했는가.\n"
@@ -191,8 +195,18 @@ def build_args():
                    help="skip the Gemini judge -> local gold-ROUGE only (no API key needed)")
     p.add_argument("--no_rouge", action="store_true",
                    help="skip the local gold-ROUGE comparison")
+    p.add_argument("--accuracy_weight", type=float, default=2.0,
+                   help="weight of the accuracy dimension when combining scores to "
+                        "pick the winner (coverage/brevity weight 1 each). >1 makes "
+                        "accuracy dominate; 1.0 = plain average.")
     p.add_argument("--out", default=None, help="optional JSONL of per-example results")
     return p.parse_args()
+
+
+def weighted_avg(s, weights):
+    """Weighted mean of the dimension scores in ``s`` using ``weights`` (per DIM key)."""
+    tot = sum(weights[k] for k, _ in DIMS)
+    return sum(weights[k] * s[k] for k, _ in DIMS) / tot
 
 
 def main():
@@ -228,6 +242,9 @@ def main():
     base_cfg = copy.deepcopy(gen_cfg)
     base_cfg.plausibility_alpha = 0.0
     device = "cuda" if _cuda_available() else "cpu"
+
+    # accuracy weighted heavier than coverage/brevity when picking the winner
+    weights = {"accuracy": args.accuracy_weight, "coverage": 1.0, "brevity": 1.0}
 
     tally = {"mine": 0, "base": 0, "tie": 0}                 # Gemini judge (by avg score)
     ssum = {"mine": {k: 0.0 for k, _ in DIMS}, "base": {k: 0.0 for k, _ in DIMS}}
@@ -284,7 +301,10 @@ def main():
                 for k, _ in DIMS:
                     ssum["mine"][k] += sm[k]
                     ssum["base"][k] += sb[k]
-                jwin = "mine" if sm["avg"] > sb["avg"] else ("base" if sb["avg"] > sm["avg"] else "tie")
+                # winner by accuracy-weighted average
+                wm, wb = weighted_avg(sm, weights), weighted_avg(sb, weights)
+                sm["wavg"], sb["wavg"] = wm, wb
+                jwin = "mine" if wm > wb else ("base" if wb > wm else "tie")
                 tally[jwin] += 1
                 dec = tally["mine"] + tally["base"]
                 wr = 100.0 * tally["mine"] / dec if dec else 0.0
@@ -294,7 +314,7 @@ def main():
                 dims = "  ".join(
                     f"{lab} mlp {sm[k]:.0f}/llm {sb[k]:.0f}" for k, lab in DIMS
                 )
-                line += (f" | {dims}  avg mlp {sm['avg']:.2f}/llm {sb['avg']:.2f} "
+                line += (f" | {dims}  가중avg mlp {wm:.2f}/llm {wb:.2f} "
                          f"-> {_label[jwin]:7s} (win {wr:.0f}%)")
 
         print(line)
@@ -319,14 +339,15 @@ def main():
         c = scount or 1
         m_avg = {k: ssum["mine"][k] / c for k, _ in DIMS}
         b_avg = {k: ssum["base"][k] / c for k, _ in DIMS}
-        m_all = sum(m_avg.values()) / len(DIMS)
-        b_all = sum(b_avg.values()) / len(DIMS)
-        print(f"[Gemini judge={args.gemini_model}] 항목별 평균 점수 (1~5, {scount} examples 채점):")
+        m_w = weighted_avg(m_avg, weights)
+        b_w = weighted_avg(b_avg, weights)
+        print(f"[Gemini judge={args.gemini_model}] 항목별 평균 점수 (1~5, {scount} examples 채점, "
+              f"정확성 가중치 {args.accuracy_weight:g}):")
         hdr = "  ".join(f"{lab}" for _, lab in DIMS)
-        print(f"        {hdr}   전체평균")
-        print(f"  MINE  " + "     ".join(f"{m_avg[k]:.2f}" for k, _ in DIMS) + f"    {m_all:.2f}")
-        print(f"  BASE  " + "     ".join(f"{b_avg[k]:.2f}" for k, _ in DIMS) + f"    {b_all:.2f}")
-        print(f"  평균점수 기준 승: MINE {tally['mine']} / BASE {tally['base']} / 무승부 {tally['tie']}"
+        print(f"        {hdr}   가중평균")
+        print(f"  MINE  " + "     ".join(f"{m_avg[k]:.2f}" for k, _ in DIMS) + f"    {m_w:.2f}")
+        print(f"  BASE  " + "     ".join(f"{b_avg[k]:.2f}" for k, _ in DIMS) + f"    {b_w:.2f}")
+        print(f"  가중평균 기준 승: MINE {tally['mine']} / BASE {tally['base']} / 무승부 {tally['tie']}"
               f"  (MINE 승률 {wr:.1f}%)")
     print(bar)
 
@@ -346,11 +367,14 @@ def main():
             summary["rouge_llm_avg"] = {k: rsum["base"][k] / n for k in rsum["base"]}
         if do_judge:
             c = scount or 1
+            m_avg = {k: ssum["mine"][k] / c for k, _ in DIMS}
+            b_avg = {k: ssum["base"][k] / c for k, _ in DIMS}
             summary["judge_model"] = args.gemini_model
             summary["judge_scored"] = scount
-            summary["judge_win_by_avg"] = {"llm_mlp": tally["mine"], "llm": tally["base"], "tie": tally["tie"]}
-            summary["score_llm_mlp_avg"] = {k: ssum["mine"][k] / c for k, _ in DIMS}
-            summary["score_llm_avg"] = {k: ssum["base"][k] / c for k, _ in DIMS}
+            summary["accuracy_weight"] = args.accuracy_weight
+            summary["judge_win_by_weighted_avg"] = {"llm_mlp": tally["mine"], "llm": tally["base"], "tie": tally["tie"]}
+            summary["score_llm_mlp_avg"] = {**m_avg, "weighted": weighted_avg(m_avg, weights)}
+            summary["score_llm_avg"] = {**b_avg, "weighted": weighted_avg(b_avg, weights)}
         # single valid JSON: {summary, results:[...]}
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump({"summary": summary, "results": rows_out}, f,
