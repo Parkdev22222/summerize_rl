@@ -273,15 +273,18 @@ def judge_prompt_subscore(source: str, summary: str, keyfacts=None) -> str:
             "등 중요한 사실을 빠짐없이 담았는가.\n"
         )
     return (
-        "당신은 군사 상황보고 요약을 채점하는 엄정한 심사관이다. [원문]을 근거로 [요약]을 "
-        "아래 세 기준에 대해 각각 0~5점(정수)으로 매기고, 마지막 줄에 세 점수의 합을 "
-        "[총점]으로 적어라.\n"
-        "- 정확성(0-5): 부대 명칭·병력 규모·장비 종류와 수량·날짜/시간·지명을 원문과 정확히 "
-        "일치시켰는가(틀리면 감점).\n"
+        "당신은 군사 상황보고 요약을 채점하는 엄정한 심사관이다. [원문]을 근거로 [요약]을 채점하라.\n"
+        "[1단계 — 정확성 사실 대조] 먼저 [원문]의 '검증 가능한 사실 항목'을 빠짐없이 한 줄씩 "
+        "나열하라: 각 부대의 보유 무기체계와 그 수량, 총 병력, 부상자·사망자 등 수치가 딸린 "
+        "항목을 각각 하나의 항목으로 센다(예: '대전차미사일 5기', '박격포 10문'은 각각 별개 항목). "
+        "각 항목이 [요약]에 정확히(무기체계 이름 + 원문 수량까지 일치) 반영됐으면 O, 누락·수량 "
+        "생략·수치 오류면 X로 표시하라.\n"
+        "[2단계 — 나머지 항목 0~5점(정수)]\n"
         "- 비조작(0-5): 원문에 없는 부대·수치·장비·사건을 지어내지 않았는가(지어내면 감점).\n"
         + crit3 +
-        "아래 형식으로만 출력하라(다른 말 금지):\n"
-        "정확성: <0-5>\n비조작: <0-5>\n핵심포함: <0-5>\n[총점]: <0-15>\n\n"
+        "[출력] 대조표를 먼저 보인 뒤, 마지막에 아래 형식으로 출력하라(정확성_적중 = O 개수/전체 "
+        "항목 수):\n"
+        "정확성_적중: <O수>/<전체수>\n비조작: <0-5>\n핵심포함: <0-5>\n\n"
         f"[원문]\n{source}\n\n{kf_block}[요약]\n{summary}\n\n채점:\n"
     )
 
@@ -290,13 +293,30 @@ _SUB_LABELS = ("정확성", "비조작", "핵심포함")
 
 
 def _parse_subscore(text: str | None) -> float | None:
-    """Parse the 0-15 sub-score judge output -> [0,1], or None if unreadable.
+    """Parse the sub-score judge output -> reward in [0,1], or None if unreadable.
 
-    Priority: (1) sum of the three labeled 0-5 sub-scores; (2) the ``[총점]``
-    number (0-15); (3) the last 0-15 integer anywhere. More robust and
-    scale-explicit than :func:`_parse_score`.
+    Primary path (mirrors compare_gemini): the accuracy sub-score is COMPUTED IN
+    CODE from the O/X checklist ratio ``정확성_적중: h/t`` -> 5*(h/t), so accuracy no
+    longer depends on the judge's own arithmetic/scale; it is summed with the
+    비조작/핵심포함 0-5 sub-scores to 0-15 and normalized. Robust fallbacks keep a
+    weaker local judge usable: (2) three labeled 0-5 sub-scores, (3) ``[총점]``
+    0-15, (4) the last 0-15 integer.
     """
     t = text or ""
+    # (1) accuracy from the O/X checklist counts (compare_gemini-style)
+    acc = None
+    m = re.search(r"정확성[_ ]?적중\s*[:：]?\s*(\d+)\s*/\s*(\d+)", t)
+    if m:
+        h, tot = int(m.group(1)), int(m.group(2))
+        acc = 5.0 if tot <= 0 else 5.0 * (max(0, min(h, tot)) / tot)
+    others = []
+    for label in ("비조작", "핵심포함"):
+        mm = re.search(label + r"\s*[:：]?\s*([0-5])", t)
+        if mm:
+            others.append(int(mm.group(1)))
+    if acc is not None and len(others) == 2:
+        return (acc + others[0] + others[1]) / 15.0
+    # (2) fallback: three labeled 0-5 sub-scores
     subs = []
     for label in _SUB_LABELS:
         m = re.search(label + r"\s*[:：]?\s*([0-5])", t)
@@ -304,11 +324,13 @@ def _parse_subscore(text: str | None) -> float | None:
             subs.append(int(m.group(1)))
     if len(subs) == 3:
         return sum(subs) / 15.0
+    # (3) fallback: [총점] 0-15
     m = re.search(r"총점\s*\]?\s*[:：]?\s*(\d{1,2})", t)
     if m:
         v = int(m.group(1))
         if 0 <= v <= 15:
             return v / 15.0
+    # (4) fallback: last 0-15 integer
     nums = [int(x) for x in re.findall(r"\d{1,2}", t)]
     nums = [n for n in nums if 0 <= n <= 15]
     if nums:
