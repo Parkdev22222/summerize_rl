@@ -123,9 +123,11 @@ Gemini는 요약이 아니라 **심판**만 한다. single_infer의 모델 로�
 - **MINE**: EXAONE + 학습된 SAD/FC head, 3-branch context-aware 디코딩.
 - **BASE**: 순수 EXAONE — 같은 프롬프트, 단일 브랜치 일반 생성(MLP·CAD 없음). `presumm`/`null`을
   안 넣으면 `_sad_generate`가 `combined=main`으로 떨어져 FC head가 개입하지 않는다(=raw 백본).
-- **판정(Gemini)**: 각 쌍을 **후보 순서를 바꿔 두 번** 물어, 두 순서가 일치할 때만 승패 인정
-  (불일치=무승부) → 위치 편향 상쇄. 두 요약 다 Gemini 것이 아니므로 자기선호 편향도 없다.
-  승률 = MINE승 / (MINE승+BASE승), 무승부 제외.
+- **판정(Gemini, 항목별 점수)**: 각 요약을 **독립적으로** 정확성/누락/간결성 **1~5점** 채점한다
+  (후보를 따로 채점 → 위치 편향 없음, 두 요약 다 Gemini 것이 아니라 자기선호 편향도 없음).
+  정확성이 최우선(환각·수치 오류면 1~2점). 예제마다 항목별 점수를 출력하고, **세 항목 평균**이
+  높은 쪽을 승자로 집계. 끝에 MINE/BASE의 **항목별 평균 점수 표**와 평균점수 기준 승률을 낸다.
+  (택1 방식보다 실행 간 결과가 덜 흔들린다.)
 ```bash
 GEMINI_API_KEY=... python compare_gemini.py \
     --model_name_or_path LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct --loading_mode bf16 \
