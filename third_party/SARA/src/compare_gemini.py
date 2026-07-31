@@ -241,6 +241,40 @@ def weighted_avg(s, weights):
     return sum(weights[k] * s[k] for k, _ in DIMS) / tot
 
 
+def gemini_winrate_eval(judge_call, triples, accuracy_weight=2.0):
+    """Score a batch of (source, mine, base) triples with the Gemini judge and
+    return MINE's win rate + average scores. Reusable from the training val loop.
+
+    ``triples``: iterable of (source, mine_summary, base_summary).
+    Returns a dict: winrate in [0,1] (ties excluded), n scored, per-side accuracy
+    and weighted-average means. Examples whose scoring fails are skipped.
+    """
+    weights = {"accuracy": accuracy_weight, "coverage": 1.0, "brevity": 1.0}
+    wins = {"mine": 0, "base": 0, "tie": 0}
+    acc = {"mine": 0.0, "base": 0.0}
+    wavg = {"mine": 0.0, "base": 0.0}
+    scored = 0
+    for source, mine, base in triples:
+        sm = score_summary(judge_call, source, mine)
+        sb = score_summary(judge_call, source, base)
+        if sm is None or sb is None:
+            continue
+        scored += 1
+        acc["mine"] += sm["accuracy"]; acc["base"] += sb["accuracy"]
+        wm, wb = weighted_avg(sm, weights), weighted_avg(sb, weights)
+        wavg["mine"] += wm; wavg["base"] += wb
+        wins["mine" if wm > wb else ("base" if wb > wm else "tie")] += 1
+    dec = wins["mine"] + wins["base"]
+    c = scored or 1
+    return {
+        "n": scored,
+        "winrate": (wins["mine"] / dec) if dec else 0.0,   # MINE win rate, [0,1]
+        "wins": wins,
+        "acc_mine": acc["mine"] / c, "acc_base": acc["base"] / c,
+        "wavg_mine": wavg["mine"] / c, "wavg_base": wavg["base"] / c,
+    }
+
+
 def main():
     args = build_args()
     do_judge = not args.skip_judge

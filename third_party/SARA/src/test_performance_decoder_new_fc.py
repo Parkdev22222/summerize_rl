@@ -415,6 +415,47 @@ def test(args, test_set, logger, tokenizer, DEVICE, model, generation_config):
     return (result_dict['rougeLsum_fmeasure'], result_dict['rouge1_fmeasure'], result_dict['rouge2_fmeasure'], result_dict.get('factkb', 0.0))   # 返回rouge-L
 
 
+def gemini_val_pairs(args, model, tokenizer, DEVICE, rows, gen_config, n):
+    """Generate (source, MINE, BASE) summaries for the first ``n`` rows, for the
+    Gemini win-rate val metric. MINE = context-aware 3-branch decode (what the
+    model is trained to do); BASE = pure single-branch decode of the same input
+    (the raw backbone, no SAD combination). Rows are the templated dataset rows
+    ([templated_input, summary, presumm, triplets]); the templated input (which
+    contains the report) is passed to the judge as the source."""
+    model.eval()
+    triples = []
+    for row in rows[:n]:
+        src = row[0]
+        tok = tokenizer([src], return_tensors="pt", max_length=1800, padding=True, truncation=True)
+        ilen = tok.input_ids.shape[1]
+        with torch.no_grad():
+            # MINE -- context-aware (presumm + null branches), same as test()
+            tok_pre = tokenizer([presumm_input_decoder(row, args.dataset)], return_tensors="pt",
+                                max_length=1800, padding=True, truncation=True)
+            tok_null = tokenizer([get_null_input_decoder(row, args.dataset)], return_tensors="pt",
+                                 max_length=1800, padding=True, truncation=True)
+            out_m = model.generate(
+                input_ids=tok.input_ids.to(DEVICE),
+                presumm_input=tok_pre.input_ids.to(DEVICE),
+                null_inputs=tok_null.input_ids.to(DEVICE),
+                attention_mask=tok.attention_mask.to(DEVICE),
+                presumm_attention_mask=tok_pre.attention_mask.to(DEVICE),
+                generation_config=gen_config,
+            )
+            # BASE -- pure single-branch (no presumm/null -> FC head not engaged)
+            out_b = model.generate(
+                input_ids=tok.input_ids.to(DEVICE),
+                attention_mask=tok.attention_mask.to(DEVICE),
+                generation_config=gen_config,
+            )
+        mine = tokenizer.batch_decode(out_m[:, ilen:], skip_special_tokens=True,
+                                      reduce_tokenization_space=True)[0]
+        base = tokenizer.batch_decode(out_b[:, ilen:], skip_special_tokens=True,
+                                      reduce_tokenization_space=True)[0]
+        triples.append((src, mine, base))
+    return triples
+
+
 def convert_my_layers_to_fp32(model):
     # 遍历模型的所有子模块
     for name, module in model.named_modules():
@@ -537,6 +578,16 @@ if __name__ == "__main__":
                         help="TensorBoard log dir (empty = disabled). Logs train/loss and reward/* per step.")
     parser.add_argument("--reward_ema_beta", type=float, default=0.98,
                         help="EMA smoothing factor for reward_ema/* TensorBoard curves (higher = smoother).")
+    # Gemini win-rate during validation (like compare_gemini.py) -> TensorBoard.
+    parser.add_argument("--gemini_val_n", type=int, default=0,
+                        help="#test examples to judge with the Gemini API at each "
+                             "validation (0 = off). MINE vs BASE win rate -> val/gemini_*. "
+                             "Needs GEMINI_API_KEY. Keep small (API cost).")
+    parser.add_argument("--gemini_val_every", type=int, default=1,
+                        help="run the Gemini eval only every N validation rounds (cost control).")
+    parser.add_argument("--gemini_val_model", type=str, default="gemini-3.5-flash")
+    parser.add_argument("--gemini_val_accuracy_weight", type=float, default=2.0,
+                        help="accuracy weight when combining judge scores to pick a winner.")
     args = parser.parse_args()
 
     # 打印全部
@@ -804,6 +855,26 @@ if __name__ == "__main__":
         from reward_extras import ema_update
         reward_ema = {}
 
+        # Optional: Gemini-API win-rate (MINE vs BASE) at validation -> val/gemini_*.
+        gemini_judge_call = None
+        gemini_val_round = 0
+        if args.gemini_val_n > 0:
+            _key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+            if not _key:
+                logger.info("gemini_val_n>0 but GEMINI_API_KEY unset -> Gemini val eval disabled.")
+                print("[gemini-val] GEMINI_API_KEY 미설정 -> Gemini 승률 로깅 비활성")
+            else:
+                try:
+                    from compare_gemini import make_gemini, gemini_winrate_eval
+                    gemini_judge_call = make_gemini(_key, args.gemini_val_model, 0.0)
+                    logger.info("Gemini val win-rate ENABLED: n=%d every %d val rounds (model=%s)",
+                                args.gemini_val_n, args.gemini_val_every, args.gemini_val_model)
+                    print("[gemini-val] ENABLED n={} every {} val (model={})".format(
+                        args.gemini_val_n, args.gemini_val_every, args.gemini_val_model))
+                except Exception as e:  # noqa: BLE001 - missing SDK etc.
+                    logger.info("Gemini val eval disabled (%s)", e)
+                    print("[gemini-val] disabled ({})".format(e))
+
         # LLM-as-judge using the LOCAL EXAONE backbone (no API key / network).
         judge_model = None
         if args.judge_weight > 0:
@@ -1061,6 +1132,29 @@ if __name__ == "__main__":
                         writer.add_scalar("val/added_results", added_results, iteration)
                         writer.add_scalar("val/best_added_results", best_val_score, iteration)
                         writer.flush()
+
+                    # Gemini win-rate (MINE vs BASE, judged like compare_gemini.py).
+                    if writer is not None and gemini_judge_call is not None:
+                        if gemini_val_round % args.gemini_val_every == 0:
+                            try:
+                                triples = gemini_val_pairs(
+                                    args, model, tokenizer, DEVICE, test_set,
+                                    test_generation_config, args.gemini_val_n)
+                                res = gemini_winrate_eval(
+                                    gemini_judge_call, triples,
+                                    accuracy_weight=args.gemini_val_accuracy_weight)
+                                writer.add_scalar("val/gemini_winrate", res["winrate"], iteration)
+                                writer.add_scalar("val/gemini_score_mine", res["wavg_mine"], iteration)
+                                writer.add_scalar("val/gemini_score_base", res["wavg_base"], iteration)
+                                writer.add_scalar("val/gemini_accuracy_mine", res["acc_mine"], iteration)
+                                writer.add_scalar("val/gemini_accuracy_base", res["acc_base"], iteration)
+                                writer.flush()
+                                logger.info("gemini val winrate %.3f (n=%d) mine %.2f / base %.2f",
+                                            res["winrate"], res["n"], res["wavg_mine"], res["wavg_base"])
+                            except Exception as e:  # noqa: BLE001 - API/parse errors must not kill training
+                                logger.info("gemini val eval failed this round (%s)", e)
+                            model.train()  # restore train mode after eval-mode generation
+                        gemini_val_round += 1
 
                     save_checkpoint(args, model, infos, optimizer, histories)
                     if args.save_history_ckpt:

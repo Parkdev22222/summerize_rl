@@ -70,6 +70,18 @@ SARA 원본엔 TensorBoard가 없어 추가했다. `--tensorboard_logdir <경로
 - `reward/weighted_mean` — baseline 차감 전, 가중합된 보상의 샘플 평균(학습이 요약 품질을
   실제로 올리는지 보는 핵심 곡선).
 
+**검증 때 Gemini 승률 로깅(`--gemini_val_n`)**: val마다 테스트셋 앞 N개에 대해 MINE(내 방법)과
+BASE(순수 EXAONE) 요약을 생성해 compare_gemini와 같은 항목별 채점(정확성 O/X 체크리스트)으로
+Gemini가 승패를 매기고, `val/gemini_winrate`(0~1)·`val/gemini_score_mine|base`·
+`val/gemini_accuracy_mine|base`를 TensorBoard에 기록한다. `GEMINI_API_KEY` 필요, 기본 off(0).
+비용 때문에 **N은 작게**(예: 5) 쓰고, `--gemini_val_every`로 몇 번의 val마다 한 번만 돌릴 수 있다.
+API 오류가 나도 학습은 중단되지 않는다(해당 라운드만 건너뜀).
+```bash
+python test_performance_decoder_new_fc.py --do_train ... \
+    --gemini_val_n 5 --gemini_val_every 4 --gemini_val_model gemini-3.5-flash \
+    --gemini_val_accuracy_weight 2.0    # GEMINI_API_KEY=... 필요
+```
+
 ```bash
 # 학습에 로그 경로 지정
 python test_performance_decoder_new_fc.py ... --tensorboard_logdir ../runs/exaone_ko_500
