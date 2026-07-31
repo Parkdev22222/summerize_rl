@@ -97,35 +97,37 @@ def _retry(fn, retries=3, label="gemini"):
 # for the report. Priority (accuracy >> coverage > brevity) is baked into the
 # scoring guide, so a hallucination or wrong number pushes accuracy toward 1.
 DIMS = [
-    ("accuracy", "정확성"),   # 환각 없음 + 장비수·병력·수치 정확
+    ("accuracy", "정확성"),   # O/X 체크리스트(무기체계+수량) 적중률 -> 1~5
     ("coverage", "누락"),     # 원문 핵심 문장 포함 (5=누락 없음)
     ("brevity", "간결성"),    # 군더더기 없이 간결
 ]
 
+
+def _fmt_dim(s, k):
+    """Score display; accuracy also shows its O/X hit ratio for transparency."""
+    if k == "accuracy" and s.get("accuracy_total"):
+        return f"{s[k]:.1f}({int(s['accuracy_hits'])}/{int(s['accuracy_total'])})"
+    return f"{s[k]:.1f}"
+
 _SCORE_GUIDE = (
-    "아래 [요약]이 [원문]을 얼마나 잘 요약했는지 세 항목을 각각 1.0~5.0점으로 채점하라. "
-    "근소한 품질 차이도 반드시 구분되도록 **소수점 한 자리까지 세밀하게** 매기고, 서로 다른 "
-    "요약을 같은 점수로 뭉뚱그리지 마라. 오류 유무의 이분법(1~2 아니면 5)으로 매기지 말고, "
-    "'정확히 반영한 비율'에 비례해 연속적으로 점수를 매겨라.\n"
-    "채점 항목:\n"
-    "- accuracy (정확성, 가장 중요): 원문에 명시된 각 부대의 보유 무기체계·장비 수량·총 병력·"
-    "부상자/사망자 등 '검증 가능한 사실'을 요약이 얼마나 정확히 반영했는지의 비율로 매긴다.\n"
-    "    · 감점 요인: 환각(원문에 없는 부대·장비·수치를 지어냄), 무기체계 누락(원문에 있는 "
-    "보유 무기체계 자체를 빠뜨림), 수량 누락(무기체계 이름은 적었으나 원문의 수량을 "
-    "빠뜨림 — 예: 원문 '대전차미사일 5기, 박격포 10문'을 요약이 '대전차미사일·박격포 "
-    "보유'라고만 적어 수량을 생략한 경우도 감점), 수치 오류/오기입(수량·병력·사상자 "
-    "수치를 원문과 다르게 적음). 원문에 수치가 명시된 항목은 요약도 그 수치를 정확히 "
-    "포함해야 만점이며, 수치를 생략하면 그 항목은 부분 점수만 인정한다. "
-    "오류 1건마다 심각도에 비례해 조금씩 깎아 두 요약의 미세한 차이도 점수로 벌려라.\n"
-    "    · 척도: 검증 가능한 사실을 거의 다 정확=4.5~5.0, 대부분 맞고 1~2개 누락/오기=3.5~4.4, "
-    "절반가량 정확=2.5~3.4, 다수 오류·누락=1.5~2.4, 대부분 틀리거나 심각한 환각=1.0~1.4.\n"
-    "- coverage (누락): 원문의 중요한 상황·조치·건의 등 핵심 내용을 담은 비율로 매긴다. "
-    "거의 다 담음=4.5~5.0, 일부 누락=3.0~4.4, 절반 누락=2.0~2.9, 대부분 누락=1.0~1.9.\n"
+    "아래 [요약]이 [원문]을 얼마나 잘 요약했는지 채점하라.\n"
+    "[1단계 — 정확성 사실 대조 (반드시 항목별로 기계적으로)]\n"
+    "먼저 [원문]에서 '검증 가능한 사실 항목'을 빠짐없이 뽑아 한 줄씩 나열하라: 각 부대의 "
+    "보유 무기체계와 그 수량, 총 병력, 부상자·사망자 등 수치가 딸린 항목을 각각 하나의 "
+    "항목으로 센다(예: '대전차미사일 5기', '박격포 10문', '병력 1,200명'은 각각 별개 항목).\n"
+    "각 항목마다, 그 항목이 [요약]에 '정확히'(무기체계 이름 + 원문 수량까지 일치) 반영됐으면 "
+    "O, 누락되었거나 수량을 빠뜨렸거나 수치가 틀렸으면 X로 표시하라. "
+    "(예: 원문 '대전차미사일 5기'를 요약이 '대전차미사일 보유'로만 적어 수량을 빠뜨리면 X, "
+    "'박격포 8문'으로 수량을 틀리게 적어도 X.)\n"
+    "[2단계 — 나머지 두 항목 채점 (1.0~5.0, 소수점 한 자리, 비율에 비례해 세밀하게)]\n"
+    "- coverage (누락): 원문의 중요한 상황·조치·건의 등 핵심 내용을 담은 비율. 거의 다 담음"
+    "=4.5~5.0, 일부 누락=3.0~4.4, 절반 누락=2.0~2.9, 대부분 누락=1.0~1.9.\n"
     "- brevity (간결성): 군더더기 없이 핵심만 명료하게 표현한 정도. 매우 간결=4.5~5.0, "
     "다소 장황=3.0~4.4, 불필요한 반복·수사가 많음=1.0~2.9.\n"
-    "먼저 한두 문장으로 간단히 평가한 뒤, 맨 마지막 줄에 아래 형식의 JSON 하나만 출력하라 "
-    "(소수점 한 자리 허용):\n"
-    '{"accuracy": 4.3, "coverage": 3.8, "brevity": 4.0}\n'
+    "[출력] 1단계 대조표를 먼저 보인 뒤, 맨 마지막 줄에 아래 형식의 JSON 하나만 출력하라. "
+    "accuracy_hits = 1단계에서 O로 표시한 항목 수, accuracy_total = 1단계 전체 항목 수(둘 다 "
+    "정수):\n"
+    '{"accuracy_hits": 9, "accuracy_total": 12, "coverage": 3.8, "brevity": 4.0}\n'
 )
 
 
@@ -136,8 +138,13 @@ def score_prompt(source, summary):
 
 
 def _parse_dim_scores(text):
-    """Pull {"accuracy":n,"coverage":n,"brevity":n} (each clamped 1-5) from the
-    judge's text, tolerating a preamble before the JSON. None if unparseable."""
+    """Parse the judge JSON, tolerating a checklist preamble before it.
+
+    accuracy is COMPUTED IN CODE from the O/X checklist counts
+    (accuracy_hits/accuracy_total) -> 1 + 4*(hits/total), a 1-5 score. This removes
+    the LLM's own arithmetic/scale variance from the most important dimension, so
+    the same summary yields the same accuracy score. coverage/brevity stay the
+    judge's graded 1-5 values. None if unparseable."""
     if not text or "{" not in text or "}" not in text:
         return None
     blob = text[text.find("{"): text.rfind("}") + 1]
@@ -145,8 +152,19 @@ def _parse_dim_scores(text):
         obj = json.loads(blob)
     except Exception:
         return None
-    out = {}
-    for key, _lab in DIMS:
+    h, t = obj.get("accuracy_hits"), obj.get("accuracy_total")
+    if not isinstance(h, (int, float)) or isinstance(h, bool):
+        return None
+    if not isinstance(t, (int, float)) or isinstance(t, bool):
+        return None
+    h, t = float(h), float(t)
+    if t <= 0:
+        acc, h, t = 5.0, 0.0, 0.0          # no verifiable facts -> vacuously accurate
+    else:
+        h = max(0.0, min(h, t))            # clamp hits into [0, total]
+        acc = 1.0 + 4.0 * (h / t)          # ratio 0 -> 1점, 1 -> 5점
+    out = {"accuracy": round(acc, 3), "accuracy_hits": h, "accuracy_total": t}
+    for key in ("coverage", "brevity"):
         v = obj.get(key)
         if not isinstance(v, (int, float)) or isinstance(v, bool):
             return None
@@ -327,7 +345,7 @@ def main():
                 rec["judge_winner"] = _label[jwin]
                 # print each dimension's score every time
                 dims = "  ".join(
-                    f"{lab} mlp {sm[k]:.1f}/llm {sb[k]:.1f}" for k, lab in DIMS
+                    f"{lab} mlp {_fmt_dim(sm, k)}/llm {_fmt_dim(sb, k)}" for k, lab in DIMS
                 )
                 line += (f" | {dims}  가중avg mlp {wm:.2f}/llm {wb:.2f} "
                          f"-> {_label[jwin]:7s} (win {wr:.0f}%)")
