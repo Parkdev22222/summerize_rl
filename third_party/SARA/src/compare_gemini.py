@@ -48,16 +48,18 @@ from single_infer import (
 
 
 # -- Gemini adapter (judge only; works with either google SDK) ----------------
-def make_gemini(api_key, model_name, temperature=0.0):
+def make_gemini(api_key, model_name, temperature=0.0, seed=42):
     try:
         from google import genai  # new SDK: pip install google-genai
 
         client = genai.Client(api_key=api_key)
+        # temperature 0 + a fixed seed -> greedy, reproducible decoding: the judge
+        # returns the same verdict for the same prompt every run (no sampling).
+        cfg = {"temperature": temperature, "seed": seed}
 
         def call(prompt):
             resp = client.models.generate_content(
-                model=model_name, contents=prompt,
-                config={"temperature": temperature},
+                model=model_name, contents=prompt, config=cfg,
             )
             return resp.text or ""
 
@@ -68,11 +70,11 @@ def make_gemini(api_key, model_name, temperature=0.0):
 
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(model_name)
+    # older SDK has no seed field; temperature 0 is the best determinism it offers.
+    gcfg = {"temperature": temperature}
 
     def call(prompt):
-        return model.generate_content(
-            prompt, generation_config={"temperature": temperature}
-        ).text or ""
+        return model.generate_content(prompt, generation_config=gcfg).text or ""
 
     return call
 
@@ -198,7 +200,11 @@ def build_args():
     add_model_decode_args(p)
     p.add_argument("--limit", type=int, default=0, help="cap on #test examples (0 = all)")
     p.add_argument("--gemini_model", default="gemini-3.5-flash", help="Gemini judge model id")
-    p.add_argument("--gemini_temperature", type=float, default=0.0)
+    p.add_argument("--gemini_temperature", type=float, default=0.0,
+                   help="0 = greedy/deterministic (default); keep 0 for fixed verdicts")
+    p.add_argument("--gemini_seed", type=int, default=42,
+                   help="fixed decoding seed so the judge returns the same answer "
+                        "every run (new google-genai SDK only)")
     p.add_argument("--skip_judge", action="store_true",
                    help="skip the Gemini judge -> local gold-ROUGE only (no API key needed)")
     p.add_argument("--no_rouge", action="store_true",
@@ -230,7 +236,8 @@ def main():
         if not api_key:
             raise SystemExit("환경변수 GEMINI_API_KEY (또는 GOOGLE_API_KEY)를 설정하세요 "
                              "(또는 --skip_judge 로 ROUGE만).")
-        judge_call = make_gemini(api_key, args.gemini_model, args.gemini_temperature)
+        judge_call = make_gemini(api_key, args.gemini_model, args.gemini_temperature,
+                                 seed=args.gemini_seed)
 
     evaluator = None
     if do_rouge:
