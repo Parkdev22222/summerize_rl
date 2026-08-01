@@ -553,11 +553,15 @@ def load_exaone_sad(args):
     config.sqrt_method = getattr(args, "sqrt_method", "concate_dim")
     config.fc_init = getattr(args, "fc_init", "none")  # 'none' | 'oproj'
 
+    # --device (e.g. 'cuda:0') loads the whole model onto one device; otherwise
+    # spread across all GPUs with device_map='balanced'.
+    _dev = getattr(args, "device", None)
+    device_map = {"": _dev} if _dev else "balanced"
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name_or_path,
         config=config,
         torch_dtype=dtype,
-        device_map="balanced",
+        device_map=device_map,
         trust_remote_code=True,
     )
     model = add_sad_head(model, config, fc_fp32=getattr(args, "my_fc_fp32", True))

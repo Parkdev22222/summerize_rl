@@ -489,6 +489,11 @@ if __name__ == "__main__":
     parser.add_argument("--num_samples", type=int, default=100000)
     parser.add_argument("--max_input_length", type=int, default=1024)
     parser.add_argument("--loading_mode", type=str, default="fp32")
+    parser.add_argument("--device", type=str, default=None,
+                        help="device to place the model/tensors on, e.g. 'cuda:0' or "
+                             "'cpu'. Default: auto (cuda if available, else cpu). When "
+                             "set, the model loads onto this single device instead of "
+                             "device_map='balanced' across all GPUs.")
     parser.add_argument("--min_new_tokens", type=int, default=30)
     parser.add_argument("--max_new_tokens", type=int, default=50)
     parser.add_argument("--do_sample", action="store_true")
@@ -698,7 +703,9 @@ if __name__ == "__main__":
         model = convert_my_layers_to_fp32(model)
 
     config = AutoConfig.from_pretrained(args.model_name_or_path, trust_remote_code=True)
-    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    DEVICE = args.device if args.device else ("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info("using device: %s (cuda available=%s)", DEVICE, torch.cuda.is_available())
+    print("[device] using {} (cuda available={})".format(DEVICE, torch.cuda.is_available()))
     
     # 冻结除了最后两个全连接层之外的所有参数
     for name, param in model.named_parameters():

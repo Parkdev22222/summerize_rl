@@ -223,10 +223,11 @@ def configure_model_loading(args):
         config.ablation_main_sequence = args.ablation_main_sequence
         config.ablation_presumm_sequence = args.ablation_presumm_sequence
         config.ablation_null_sequence = args.ablation_null_sequence
+        _dev = getattr(args, "device", None)
         model = AutoModelForCausalLM.from_pretrained(
             args.model_name_or_path,
             torch_dtype=torch.bfloat16,
-            device_map="balanced",
+            device_map=({"": _dev} if _dev else "balanced"),
             trust_remote_code=True,
             config=config
         )
