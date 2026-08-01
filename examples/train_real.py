@@ -86,9 +86,98 @@ def load_glossary(path: str | None) -> Glossary:
     return MILITARY_GLOSSARY
 
 
-def main() -> None:
+def build_backend(args):
+    """Frozen backbone from args. ``--model mock`` builds a tiny CPU MockBackend
+    (no transformers / GPU) so the drivers run end-to-end for smoke tests."""
+    if args.model == "mock":
+        from summarize_rl.llm_backend import MockBackend
+        return MockBackend(vocab_size=32, hidden_size=16, eos_token_id=1, pad_token_id=0)
+    return HFBackend(
+        args.model, device=args.device, dtype=args.dtype,
+        attn_implementation=args.attn, compile_decode=args.compile_decode,
+        max_seq_len=args.max_seq_len, trust_remote_code=args.trust_remote_code,
+        use_chat_template=args.use_chat_template,
+    )
+
+
+def build_config(args, backend) -> Config:
+    """Default Config synced to the backbone, with all CLI overrides applied."""
+    cfg = Config()
+    cfg.policy.llm_hidden_size = backend.hidden_size
+    cfg.decode.eos_token_id = backend.eos_token_id
+    cfg.decode.pad_token_id = backend.pad_token_id
+    cfg.train.seed = args.seed
+    cfg.train.ckpt_dir = args.ckpt_dir
+    if args.steps is not None:
+        cfg.train.total_steps = args.steps
+    if args.lr is not None:
+        cfg.train.lr = args.lr
+    if args.num_samples is not None:
+        cfg.train.num_samples = args.num_samples
+    if args.save_every is not None:
+        cfg.train.save_every = args.save_every
+    if args.max_new_tokens is not None:
+        cfg.decode.max_new_tokens = args.max_new_tokens
+    if args.min_new_tokens is not None:
+        cfg.decode.min_new_tokens = args.min_new_tokens
+    # GRPO-specific overrides (no-ops under --rl scst).
+    if args.group_size is not None:
+        cfg.grpo.group_size = args.group_size
+    if args.kl_beta is not None:
+        cfg.grpo.kl_beta = args.kl_beta
+    if args.inner_epochs is not None:
+        cfg.grpo.inner_epochs = args.inner_epochs
+    if args.clip_eps is not None:
+        cfg.grpo.clip_eps = args.clip_eps
+    cfg.reward.balance_content = args.balance_content
+    if args.w_judge is not None:
+        cfg.reward.w_judge = args.w_judge
+    cfg.reward.judge_comparative = args.judge_comparative
+    if args.keysent_n is not None:
+        cfg.reward.keysent_n = args.keysent_n
+    if args.keysent_max_new_tokens is not None:
+        cfg.reward.keysent_max_new_tokens = args.keysent_max_new_tokens
+    if args.a_max is not None:
+        cfg.policy.a_max = args.a_max
+    if args.plausibility_alpha is not None:
+        cfg.decode.plausibility_alpha = args.plausibility_alpha
+    return cfg
+
+
+def build_trainer(args, backend=None):
+    """Assemble (trainer, backend, cfg, logger, examples, failure_log) from args.
+
+    Extracted from main() so the continual-RL orchestrator (and tests, via an
+    injected ``backend``) can reuse the exact backbone+config+trainer wiring.
+    """
+    backend = backend or build_backend(args)
+    cfg = build_config(args, backend)
+    dev = torch.device("cpu" if args.model == "mock" else args.device)
+    policy = WeightPolicy(cfg.policy).to(dev)
+    gen = torch.Generator(device=dev).manual_seed(args.seed)
+
+    glossary = load_glossary(args.glossary)
+    examples = load_corpus(args.data, args.query, args.limit)
+
+    flog = (
+        FailureLog(args.failure_log, thresholds=default_thresholds(cfg.reward))
+        if args.failure_log else None
+    )
+    if args.rl == "grpo":
+        trainer = GRPOTrainer(policy, backend, cfg, glossary=glossary,
+                              generator=gen, failure_log=flog)
+    else:
+        trainer = SCSTTrainer(policy, backend, cfg, glossary=glossary,
+                              generator=gen, failure_log=flog)
+    logger = make_logger(args.logdir)
+    return trainer, backend, cfg, logger, examples, flog
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Shared backbone/reward/training flags (reused by run_continual)."""
     p = argparse.ArgumentParser(description="Real-backbone SCST training (single GPU).")
-    p.add_argument("--model", required=True, help="HF model name/path for the frozen backbone")
+    p.add_argument("--model", required=True,
+                   help="HF model name/path for the frozen backbone ('mock' for a CPU smoke run)")
     p.add_argument("--data", default="data/scenarios_ko.jsonl", help="JSONL corpus")
     p.add_argument("--glossary", default=None, help="JSON {term: [triggers]}; omit for demo glossary")
     p.add_argument("--device", default="cuda", help="cuda | cuda:0 | cpu")
@@ -164,83 +253,17 @@ def main() -> None:
              "Enables the weakness-tracking signal + weakness/fail_rate_<axis> TB scalars. "
              "Feeds the continual-RL diagnoser; off by default.",
     )
+    return p
+
+
+def main() -> None:
+    p = build_arg_parser()
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
 
-    # --- frozen backbone -------------------------------------------------
-    # flash-attn + compiled decode on by default for throughput; both fall back
-    # / can be disabled (--attn, --no-compile-decode) for incompatible models.
-    backend = HFBackend(
-        args.model, device=args.device, dtype=args.dtype,
-        attn_implementation=args.attn, compile_decode=args.compile_decode,
-        max_seq_len=args.max_seq_len, trust_remote_code=args.trust_remote_code,
-        use_chat_template=args.use_chat_template,
-    )
-
-    # --- config, synced to the backbone ----------------------------------
-    cfg = Config()
-    cfg.policy.llm_hidden_size = backend.hidden_size
-    cfg.decode.eos_token_id = backend.eos_token_id
-    cfg.decode.pad_token_id = backend.pad_token_id
-    cfg.train.seed = args.seed
-    cfg.train.ckpt_dir = args.ckpt_dir
-    if args.steps is not None:
-        cfg.train.total_steps = args.steps
-    if args.lr is not None:
-        cfg.train.lr = args.lr
-    if args.num_samples is not None:
-        cfg.train.num_samples = args.num_samples
-    if args.save_every is not None:
-        cfg.train.save_every = args.save_every
-    if args.max_new_tokens is not None:
-        cfg.decode.max_new_tokens = args.max_new_tokens
-    if args.min_new_tokens is not None:
-        cfg.decode.min_new_tokens = args.min_new_tokens
-    # GRPO-specific overrides (no-ops under --rl scst).
-    if args.group_size is not None:
-        cfg.grpo.group_size = args.group_size
-    if args.kl_beta is not None:
-        cfg.grpo.kl_beta = args.kl_beta
-    if args.inner_epochs is not None:
-        cfg.grpo.inner_epochs = args.inner_epochs
-    if args.clip_eps is not None:
-        cfg.grpo.clip_eps = args.clip_eps
-    cfg.reward.balance_content = args.balance_content
-    if args.w_judge is not None:
-        cfg.reward.w_judge = args.w_judge
-    cfg.reward.judge_comparative = args.judge_comparative
-    if args.keysent_n is not None:
-        cfg.reward.keysent_n = args.keysent_n
-    if args.keysent_max_new_tokens is not None:
-        cfg.reward.keysent_max_new_tokens = args.keysent_max_new_tokens
-    if args.a_max is not None:
-        cfg.policy.a_max = args.a_max
-    if args.plausibility_alpha is not None:
-        cfg.decode.plausibility_alpha = args.plausibility_alpha
-
-    # --- policy on the SAME device as the backbone (stays fp32) ----------
-    # HFBackend emits logits/hidden on `device`; the policy MLP must match, and
-    # the sampling generator must live on the same device as the logits.
-    dev = torch.device(args.device)
-    policy = WeightPolicy(cfg.policy).to(dev)
-    gen = torch.Generator(device=dev).manual_seed(args.seed)
-
-    glossary = load_glossary(args.glossary)
-    examples = load_corpus(args.data, args.query, args.limit)
-
-    flog = (
-        FailureLog(args.failure_log, thresholds=default_thresholds(cfg.reward))
-        if args.failure_log else None
-    )
+    trainer, backend, cfg, logger, examples, flog = build_trainer(args)
     is_grpo = args.rl == "grpo"
-    if is_grpo:
-        trainer = GRPOTrainer(policy, backend, cfg, glossary=glossary,
-                              generator=gen, failure_log=flog)
-    else:
-        trainer = SCSTTrainer(policy, backend, cfg, glossary=glossary,
-                              generator=gen, failure_log=flog)
-    logger = make_logger(args.logdir)
 
     os.makedirs(args.ckpt_dir, exist_ok=True)
     rollouts = cfg.grpo.group_size if is_grpo else cfg.train.num_samples
