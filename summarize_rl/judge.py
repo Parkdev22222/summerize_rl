@@ -24,6 +24,7 @@ grammatical-but-wrong summary does not win points.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Protocol
 
@@ -183,3 +184,140 @@ def _parse_score(text: str | None) -> float | None:
     if not nums:
         return None
     return max(0.0, min(1.0, nums[-1] / 100.0))
+
+
+# ---------------------------------------------------------------------------
+# Multi-axis diagnostic judge (Phase 1): used only at diagnosis boundaries to
+# re-score failure candidates on distinct error axes, kept OFF the per-rollout
+# reward path so training cost is unchanged.
+# ---------------------------------------------------------------------------
+
+AXES = ("hallucination", "numeric", "entity", "omission")
+# hallucination: inventing units/events/places absent from the source
+# numeric:       wrong troop counts / equipment / times (rule-based has priority;
+#                the judge covers unit-conversion / "약 천여 명" style variants)
+# entity:        entity confusion (소대 vs 소총중대, swapping who took casualties)
+# omission:      dropping key situations / actions / recommendations
+
+
+class AxisJudge(Protocol):
+    """Score a summary on the four diagnostic AXES, each in [0, 1] (or None)."""
+
+    def score_axes(self, source: str, summary: str) -> dict[str, float] | None: ...
+
+
+def _axes_prompt(source: str, summary: str) -> str:
+    return (
+        "당신은 군사 보고서 요약을 채점하는 심사관이다. [요약]을 [원문]과 대조해 "
+        "아래 4개 항목을 각각 0~100 정수로 채점하고, JSON 하나만 출력하라.\n"
+        '{"hallucination": _, "numeric": _, "entity": _, "omission": _}\n'
+        "- hallucination: 원문에 없는 부대·사건·장소를 지어내지 않았는가 (지어냈으면 0)\n"
+        "- numeric: 병력 수·장비 대수·시각 등 수치가 정확한가\n"
+        "- entity: 부대 명칭·피해 주체 등 개체를 혼동하지 않았는가\n"
+        "- omission: 핵심 상황·조치·건의를 빠뜨리지 않았는가\n\n"
+        f"[원문]\n{source}\n\n[요약]\n{summary}\n\n[JSON]\n"
+    )
+
+
+_AXIS_RE = {
+    # Tolerate colon, equals, or bare whitespace as the axis→score separator
+    # (e.g. "entity 70", 'entity": 70', "entity=70").
+    axis: re.compile(rf'"?{axis}"?[\s:="]*(-?\d{{1,3}})') for axis in AXES
+}
+
+
+def _clamp01(v: float) -> float:
+    return max(0.0, min(1.0, v / 100.0))
+
+
+def _parse_axes_json(text: str | None) -> dict[str, float] | None:
+    """Lenient parse of a per-axis score blob into {axis: [0,1]}.
+
+    Tries a JSON object first (tolerating preamble/trailing text by extracting the
+    first ``{...}``), then falls back to a per-axis regex for backbones that won't
+    emit clean JSON. Values are clamped to [0, 100] then scaled to [0, 1]. Returns
+    only the axes it could read, or None if none parsed.
+    """
+    if not text:
+        return None
+    out: dict[str, float] = {}
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if m:
+        try:
+            obj = json.loads(m.group())
+        except (ValueError, TypeError):
+            obj = None
+        if isinstance(obj, dict):
+            for axis in AXES:
+                if axis in obj:
+                    try:
+                        out[axis] = _clamp01(float(obj[axis]))
+                    except (ValueError, TypeError):
+                        pass
+    # Regex fallback for any axis JSON didn't yield.
+    for axis in AXES:
+        if axis not in out:
+            rm = _AXIS_RE[axis].search(text)
+            if rm:
+                out[axis] = _clamp01(float(int(rm.group(1))))
+    return out or None
+
+
+class MultiAxisJudge:
+    """Per-axis diagnostic scorer backed by the local frozen backbone.
+
+    Single JSON call per (source, summary) by default; parsing degrades to a
+    per-axis regex when the model won't honour JSON. The ``numeric`` axis is a
+    *secondary* signal — rewards.ungrounded_fact_penalty already catches literal
+    numeric hallucination at rollout time; this judge covers only what lexical
+    matching misses (unit conversions, approximate phrasings). Returns None when
+    the backend cannot generate text. Cached per (source, summary).
+    """
+
+    def __init__(self, backend: LLMBackend, config: RewardConfig):
+        self.backend = backend
+        self.config = config
+        self.max_new_tokens = 128  # room for the JSON object
+        self._cache: dict[tuple[str, str], dict[str, float] | None] = {}
+
+    def score_axes(self, source: str, summary: str) -> dict[str, float] | None:
+        key = (source, summary)
+        if key in self._cache:
+            return self._cache[key]
+        try:
+            text = self.backend.generate_text(
+                _axes_prompt(source, summary), self.max_new_tokens
+            )
+        except NotImplementedError:
+            self._cache[key] = None
+            return None
+        val = _parse_axes_json(text)
+        self._cache[key] = val
+        return val
+
+
+class GeminiAxisJudge:
+    """AxisJudge over an external text-completion callable (e.g. make_gemini).
+
+    Injectable at diagnosis time so held-out scoring can use a stronger external
+    judge instead of the backbone judging its own output. ``call(prompt) -> str``
+    matches examples/eval_gemini.make_gemini's adapter. Cached per (source, summary).
+    """
+
+    def __init__(self, call, max_new_tokens: int = 128):
+        self.call = call
+        self.max_new_tokens = max_new_tokens
+        self._cache: dict[tuple[str, str], dict[str, float] | None] = {}
+
+    def score_axes(self, source: str, summary: str) -> dict[str, float] | None:
+        key = (source, summary)
+        if key in self._cache:
+            return self._cache[key]
+        try:
+            text = self.call(_axes_prompt(source, summary))
+        except Exception:
+            self._cache[key] = None
+            return None
+        val = _parse_axes_json(text)
+        self._cache[key] = val
+        return val

@@ -102,6 +102,11 @@ class RewardConfig:
     # judge in [0,1] then reads as the win-rate vs RAW (1 win / 0.5 tie / 0 loss).
     judge_comparative: bool = False
     judge_max_new_tokens: int = 24  # room for a short preamble before the score / A|B|T verdict
+    # Diagnostic multi-axis judge (judge.MultiAxisJudge, used only at diagnosis
+    # boundaries — not the reward path). "json" asks for one JSON blob of all four
+    # axis scores; switch to "separate" if a backbone's JSON parse-failure rate is
+    # high enough to warrant one prompt per axis. Only "json" is wired today.
+    judge_axes_mode: str = "json"
     target_length: int = 1024  # tokens; overage penalized (kept == decode.max_new_tokens)
     repeat_ngram: int = 3  # n-gram size for repetition penalty
     copy_ngram: int = 4  # n-gram size for the extractive-copy penalty
