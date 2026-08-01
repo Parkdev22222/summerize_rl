@@ -25,6 +25,7 @@ tb = [
     "tqdm>=4.60",
     "accelerate>=0.26",
     "google-generativeai>=0.8",
+    "setuptools>=68",  # provides pkg_resources (imported by some deps)
 ]
 
 [dependency-groups]
