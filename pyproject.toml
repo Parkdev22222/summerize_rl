@@ -16,9 +16,14 @@ hf = [
     "transformers>=4.40",
 ]
 # TensorBoard logging for training runs (examples/*, --logdir). Optional; the
-# trainers and tests run without it.
+# trainers and tests run without it. Also carries the extra deps the SARA
+# training/eval scripts need (transformers backbone, torchmetrics ROUGE, tqdm).
 tb = [
     "tensorboard>=2.10",
+    "transformers>=4.40",
+    "torchmetrics>=1.0",
+    "tqdm>=4.60",
+    "accelerate>=0.26",
 ]
 
 [dependency-groups]
