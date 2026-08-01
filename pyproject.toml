@@ -44,3 +44,15 @@ packages = ["summarize_rl"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+# Install a CUDA 12.4 torch build (works with NVIDIA drivers supporting CUDA
+# >= 12.4, incl. the 12.8 driver here). The default PyPI torch is built against a
+# newer CUDA than that driver supports ("driver too old" RuntimeError), so pull
+# torch from PyTorch's cu124 index instead.
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
