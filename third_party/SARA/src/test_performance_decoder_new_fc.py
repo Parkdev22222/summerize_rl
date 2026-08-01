@@ -1148,9 +1148,37 @@ if __name__ == "__main__":
                                 writer.add_scalar("val/gemini_score_base", res["wavg_base"], iteration)
                                 writer.add_scalar("val/gemini_accuracy_mine", res["acc_mine"], iteration)
                                 writer.add_scalar("val/gemini_accuracy_base", res["acc_base"], iteration)
+
+                                # Per-example detail: which test index MINE won/lost +
+                                # each dimension's score, both as plottable scalars and
+                                # as a readable table in the TensorBoard Text tab.
+                                _wmap = {"mine": 1.0, "tie": 0.0, "base": -1.0}
+                                _rows = ["| idx | winner | 정확성(mlp/llm) | 누락(mlp/llm) | 간결성(mlp/llm) |",
+                                         "|---|---|---|---|---|"]
+                                for ex in res["per_example"]:
+                                    i = ex["index"]
+                                    w = ex["winner"]
+                                    if w is None:  # scoring failed for this example
+                                        _rows.append(f"| {i} | (fail) | - | - | - |")
+                                        continue
+                                    sm_, sb_ = ex["mine"], ex["base"]
+                                    # +1 MINE 이김 / 0 무승부 / -1 MINE 짐(=base 우세)
+                                    writer.add_scalar(f"val_gemini_ex{i}/winner", _wmap[w], iteration)
+                                    writer.add_scalar(f"val_gemini_ex{i}/accuracy_mine", sm_["accuracy"], iteration)
+                                    writer.add_scalar(f"val_gemini_ex{i}/accuracy_base", sb_["accuracy"], iteration)
+                                    writer.add_scalar(f"val_gemini_ex{i}/coverage_mine", sm_["coverage"], iteration)
+                                    writer.add_scalar(f"val_gemini_ex{i}/coverage_base", sb_["coverage"], iteration)
+                                    writer.add_scalar(f"val_gemini_ex{i}/brevity_mine", sm_["brevity"], iteration)
+                                    writer.add_scalar(f"val_gemini_ex{i}/brevity_base", sb_["brevity"], iteration)
+                                    _rows.append(
+                                        f"| {i} | {w} | {sm_['accuracy']:.1f}/{sb_['accuracy']:.1f} | "
+                                        f"{sm_['coverage']:.1f}/{sb_['coverage']:.1f} | "
+                                        f"{sm_['brevity']:.1f}/{sb_['brevity']:.1f} |")
+                                writer.add_text("val/gemini_detail", "\n".join(_rows), iteration)
                                 writer.flush()
-                                logger.info("gemini val winrate %.3f (n=%d) mine %.2f / base %.2f",
-                                            res["winrate"], res["n"], res["wavg_mine"], res["wavg_base"])
+                                _lost = [ex["index"] for ex in res["per_example"] if ex["winner"] == "base"]
+                                logger.info("gemini val winrate %.3f (n=%d) mine %.2f / base %.2f; MINE lost idx=%s",
+                                            res["winrate"], res["n"], res["wavg_mine"], res["wavg_base"], _lost)
                             except Exception as e:  # noqa: BLE001 - API/parse errors must not kill training
                                 logger.info("gemini val eval failed this round (%s)", e)
                             model.train()  # restore train mode after eval-mode generation

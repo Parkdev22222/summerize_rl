@@ -247,23 +247,32 @@ def gemini_winrate_eval(judge_call, triples, accuracy_weight=2.0):
 
     ``triples``: iterable of (source, mine_summary, base_summary).
     Returns a dict: winrate in [0,1] (ties excluded), n scored, per-side accuracy
-    and weighted-average means. Examples whose scoring fails are skipped.
+    and weighted-average means, plus ``per_example`` -- a list (in input order) of
+    {index, winner('mine'|'base'|'tie'|None), mine:{dim scores}, base:{dim scores},
+    wavg_mine, wavg_base} so callers can log which example lost and each dimension's
+    score. Examples whose scoring fails get winner=None and are skipped from the
+    aggregates.
     """
     weights = {"accuracy": accuracy_weight, "coverage": 1.0, "brevity": 1.0}
     wins = {"mine": 0, "base": 0, "tie": 0}
     acc = {"mine": 0.0, "base": 0.0}
     wavg = {"mine": 0.0, "base": 0.0}
     scored = 0
-    for source, mine, base in triples:
+    per_example = []
+    for idx, (source, mine, base) in enumerate(triples):
         sm = score_summary(judge_call, source, mine)
         sb = score_summary(judge_call, source, base)
         if sm is None or sb is None:
+            per_example.append({"index": idx, "winner": None, "mine": sm, "base": sb})
             continue
         scored += 1
         acc["mine"] += sm["accuracy"]; acc["base"] += sb["accuracy"]
         wm, wb = weighted_avg(sm, weights), weighted_avg(sb, weights)
         wavg["mine"] += wm; wavg["base"] += wb
-        wins["mine" if wm > wb else ("base" if wb > wm else "tie")] += 1
+        jwin = "mine" if wm > wb else ("base" if wb > wm else "tie")
+        wins[jwin] += 1
+        per_example.append({"index": idx, "winner": jwin, "mine": sm, "base": sb,
+                            "wavg_mine": wm, "wavg_base": wb})
     dec = wins["mine"] + wins["base"]
     c = scored or 1
     return {
@@ -272,6 +281,7 @@ def gemini_winrate_eval(judge_call, triples, accuracy_weight=2.0):
         "wins": wins,
         "acc_mine": acc["mine"] / c, "acc_base": acc["base"] / c,
         "wavg_mine": wavg["mine"] / c, "wavg_base": wavg["base"] / c,
+        "per_example": per_example,
     }
 
 
