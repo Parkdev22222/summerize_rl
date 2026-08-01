@@ -60,6 +60,9 @@ class NullLogger:
     def log_metrics(self, metrics: Any, step: int) -> None:  # noqa: D102
         pass
 
+    def log_scalars(self, scalars: dict[str, float], step: int) -> None:  # noqa: D102
+        pass
+
     def close(self) -> None:  # noqa: D102
         pass
 
@@ -82,6 +85,15 @@ class TensorBoardLogger:
     def log_metrics(self, metrics: Any, step: int) -> None:
         for tag, value in _scalar_items(metrics):
             self.writer.add_scalar(tag, value, step)
+
+    def log_scalars(self, scalars: dict[str, float], step: int) -> None:
+        """Write arbitrary, caller-named scalars (e.g. weakness/fail_rate_<axis>).
+
+        Unlike `log_metrics`, tags are given verbatim rather than derived from a
+        metrics-dataclass field, so dynamic per-axis series can be logged.
+        """
+        for tag, value in scalars.items():
+            self.writer.add_scalar(tag, float(value), step)
 
     def close(self) -> None:
         self.writer.flush()

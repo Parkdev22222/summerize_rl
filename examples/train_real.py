@@ -38,6 +38,7 @@ from summarize_rl.llm_backend import HFBackend
 from summarize_rl.logging_utils import make_logger
 from summarize_rl.policy import WeightPolicy
 from summarize_rl.train import SCSTTrainer
+from summarize_rl.weakness import FailureLog, default_thresholds
 
 
 def load_corpus(path: str, query: str | None, limit: int | None) -> list[Example]:
@@ -56,7 +57,14 @@ def load_corpus(path: str, query: str | None, limit: int | None) -> list[Example
             rec = json.loads(line)
             src = rec.get("source_text") or ""
             triplets = [Triplet(*t) for t in rec.get("triplets", []) if len(t) == 3]
-            kwargs = {"source": src, "triplets": triplets}
+            rid = rec.get("id")
+            kwargs = {
+                "source": src,
+                "triplets": triplets,
+                "id": None if rid is None else str(rid),
+                "keyfacts": list(rec.get("keyfacts") or []),
+                "meta": {"split": rec.get("split")},
+            }
             if query:
                 kwargs["query"] = query
             examples.append(Example(**kwargs))
@@ -150,6 +158,12 @@ def main() -> None:
         "--logdir", default="runs/train_real",
         help="TensorBoard run dir (empty or 'none' disables). View: tensorboard --logdir runs",
     )
+    p.add_argument(
+        "--failure-log", default=None,
+        help="JSONL path to accumulate per-rollout axis failures (weakness.FailureLog). "
+             "Enables the weakness-tracking signal + weakness/fail_rate_<axis> TB scalars. "
+             "Feeds the continual-RL diagnoser; off by default.",
+    )
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -215,11 +229,17 @@ def main() -> None:
     glossary = load_glossary(args.glossary)
     examples = load_corpus(args.data, args.query, args.limit)
 
+    flog = (
+        FailureLog(args.failure_log, thresholds=default_thresholds(cfg.reward))
+        if args.failure_log else None
+    )
     is_grpo = args.rl == "grpo"
     if is_grpo:
-        trainer = GRPOTrainer(policy, backend, cfg, glossary=glossary, generator=gen)
+        trainer = GRPOTrainer(policy, backend, cfg, glossary=glossary,
+                              generator=gen, failure_log=flog)
     else:
-        trainer = SCSTTrainer(policy, backend, cfg, glossary=glossary, generator=gen)
+        trainer = SCSTTrainer(policy, backend, cfg, glossary=glossary,
+                              generator=gen, failure_log=flog)
     logger = make_logger(args.logdir)
 
     os.makedirs(args.ckpt_dir, exist_ok=True)
@@ -258,6 +278,8 @@ def main() -> None:
         if cfg.train.save_every and (step + 1) % cfg.train.save_every == 0:
             trainer.save_checkpoint(os.path.join(args.ckpt_dir, f"step{step+1}.pt"))
         logger.log_metrics(m, m.step)
+        if flog is not None:
+            logger.log_scalars(flog.tb_scalars(), m.step)
         if step % args.log_every == 0:
             extra = f" {m.kl:>6.3f} {m.clip_frac:>5.2f}" if is_grpo else ""
             print(f"{m.step:>5} {m.loss:>8.3f} {m.mean_reward:>7.3f} "

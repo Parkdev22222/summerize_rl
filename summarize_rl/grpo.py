@@ -42,6 +42,7 @@ from .llm_backend import LLMBackend
 from .policy import WeightPolicy
 from .rewards import FaithfulnessModel, RewardBreakdown, compute_reward
 from .train import assert_llm_frozen, build_scheduler, freeze_llm
+from .weakness import FailureLog
 
 
 @dataclass
@@ -91,6 +92,7 @@ class GRPOTrainer:
         glossary: Glossary | None = None,
         faithfulness_model: FaithfulnessModel | None = None,
         generator: torch.Generator | None = None,
+        failure_log: "FailureLog | None" = None,
     ):
         self.policy = policy
         self.backend = backend
@@ -98,6 +100,7 @@ class GRPOTrainer:
         self.glossary = glossary
         self.faithfulness_model = faithfulness_model
         self.generator = generator
+        self.failure_log = failure_log
         self.key_extractor = (
             KeySentenceExtractor(config.reward) if config.reward.w_keysent > 0 else None
         )
@@ -198,6 +201,10 @@ class GRPOTrainer:
             )
             old_logps = [torch.stack(s.logps).detach() for s in old_scored]
             ref_logps = [torch.stack(s.logps).detach() for s in ref_scored]
+
+        if self.failure_log is not None:
+            for r, bd in zip(rollouts, breakdowns):
+                self.failure_log.record(self._global_step, example, r.text, bd)
 
         return _Group(
             branch_texts=branch_texts,

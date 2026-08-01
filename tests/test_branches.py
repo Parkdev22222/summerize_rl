@@ -29,6 +29,27 @@ def test_serialize_empty():
     assert serialize_triplets([]) == ""
 
 
+def test_example_optional_metadata_fields_default_empty():
+    # Backward-compatible positional construction (source, triplets) still works.
+    ex = Example("원문", [Triplet("A", "r", "B")])
+    assert ex.id is None
+    assert ex.keyfacts == []
+    assert ex.meta == {}
+
+
+def test_example_carries_id_keyfacts_meta():
+    ex = Example(
+        "원문",
+        [],
+        id="10000",
+        keyfacts=["핵심1", "핵심2"],
+        meta={"split": "train"},
+    )
+    assert ex.id == "10000"
+    assert ex.keyfacts == ["핵심1", "핵심2"]
+    assert ex.meta == {"split": "train"}
+
+
 def test_format_glossary():
     active = [ActiveTerm("기동"), ActiveTerm("정찰")]
     out = format_glossary(active)

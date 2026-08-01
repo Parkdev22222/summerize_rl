@@ -36,6 +36,13 @@ class Example:
         "원문에 있는 부대·수치·지명만 사용하고 없는 내용은 지어내지 마라. "
         "보고번호·DTG 같은 서식 머리말은 생략하고 상황·조치·건의 위주로 작성하라."
     )
+    # Optional provenance carried from the corpus JSONL. These flow through the
+    # trainers untouched but let the weakness-tracking loop (weakness.py) key
+    # per-rollout failures by scenario id and mine failure metadata. Defaulted so
+    # existing `Example(source, triplets)` call sites stay valid.
+    id: str | None = None
+    keyfacts: list[str] = field(default_factory=list)
+    meta: dict = field(default_factory=dict)
 
 
 @dataclass

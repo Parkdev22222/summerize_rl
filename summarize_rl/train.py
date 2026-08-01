@@ -41,6 +41,7 @@ from .rewards import (
     compute_reward,
     normalize_rewards,
 )
+from .weakness import FailureLog
 
 
 def build_scheduler(optimizer, warmup_steps: int, total_steps: int) -> LambdaLR:
@@ -105,6 +106,7 @@ class SCSTTrainer:
         glossary: Glossary | None = None,
         faithfulness_model: FaithfulnessModel | None = None,
         generator: torch.Generator | None = None,
+        failure_log: "FailureLog | None" = None,
     ):
         self.policy = policy
         self.backend = backend
@@ -112,6 +114,7 @@ class SCSTTrainer:
         self.glossary = glossary
         self.faithfulness_model = faithfulness_model
         self.generator = generator
+        self.failure_log = failure_log
         self.key_extractor = (
             KeySentenceExtractor(config.reward) if config.reward.w_keysent > 0 else None
         )
@@ -171,6 +174,9 @@ class SCSTTrainer:
             )
             for r in rollouts
         ]
+        if self.failure_log is not None:
+            for r, bd in zip(rollouts, breakdowns):
+                self.failure_log.record(self._global_step, example, r.text, bd)
         return rollouts, breakdowns, active_terms
 
     def _key_sentences(self, example: Example) -> list[str] | None:

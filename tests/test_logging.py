@@ -58,3 +58,18 @@ def test_tensorboard_logger_writes_events(tmp_path):
     logger.log_metrics(_grpo_metrics(), 1)
     logger.close()
     assert any(p.name.startswith("events.out.tfevents") for p in tmp_path.iterdir())
+
+
+def test_null_logger_log_scalars_is_noop():
+    logger = make_logger("none")
+    assert isinstance(logger, NullLogger)
+    logger.log_scalars({"weakness/fail_rate_numeric": 0.3}, 5)  # must not raise
+    logger.close()
+
+
+def test_tensorboard_logger_log_scalars_writes_events(tmp_path):
+    pytest.importorskip("tensorboard")
+    logger = TensorBoardLogger(str(tmp_path))
+    logger.log_scalars({"weakness/fail_rate_numeric": 0.3, "weakness/fail_rate_omission": 0.1}, 0)
+    logger.close()
+    assert any(p.name.startswith("events.out.tfevents") for p in tmp_path.iterdir())
