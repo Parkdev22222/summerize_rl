@@ -138,6 +138,221 @@ class FailureLog:
             fh.write(json.dumps(asdict(rec), ensure_ascii=False) + "\n")
 
 
+# ---------------------------------------------------------------------------
+# Phase 3: diagnosis. Aggregate the windowed failure log, triage a sample with
+# the multi-axis judge, and confirm weak axes under three gates (absolute rate,
+# consecutive rounds, judge agreement), with RAW-ceiling reclassification.
+# ---------------------------------------------------------------------------
+
+# Reward-breakdown axis -> the diagnostic judge axis that corroborates it.
+# copy_penalty has no semantic analog, so it is trusted from lexical evidence.
+_REWARD_TO_JUDGE = {
+    "hallucination": "hallucination",
+    "coverage": "omission",
+    "key_sentence": "omission",
+    "faithfulness": "entity",
+}
+
+
+def axis_failure_rates(records: list[FailureRecord], total_rollouts: int) -> dict[str, float]:
+    """Per-axis failure rate = (failures on that axis) / total rollouts in window."""
+    n = max(1, total_rollouts)
+    counts: dict[str, int] = {}
+    for r in records:
+        counts[r.axis] = counts.get(r.axis, 0) + 1
+    return {axis: c / n for axis, c in counts.items()}
+
+
+def _median(xs: list[float]) -> float:
+    if not xs:
+        return 0.0
+    s = sorted(xs)
+    m = len(s) // 2
+    return s[m] if len(s) % 2 else (s[m - 1] + s[m]) / 2.0
+
+
+@dataclass
+class MetaProfile:
+    """Aggregated failure metadata, used by Phase 4 to steer synthesis intensity."""
+
+    by_axis: dict[str, dict]
+    overall_numeric_median: float
+
+    def severity(self, axis: str) -> float:
+        """Synthesis intensity for `axis`: how numeric-dense its failing scenarios
+        are relative to the corpus, clamped to [0.5, 2.0] (1.0 = no signal)."""
+        info = self.by_axis.get(axis)
+        if not info or self.overall_numeric_median <= 0:
+            return 1.0
+        ratio = info["numeric_median"] / self.overall_numeric_median
+        return max(0.5, min(2.0, ratio))
+
+
+def failure_meta_profile(records: list[FailureRecord]) -> MetaProfile:
+    by_axis: dict[str, dict] = {}
+    all_numeric = [float(r.meta.get("numeric_tokens", 0)) for r in records]
+    for axis in {r.axis for r in records}:
+        rows = [r for r in records if r.axis == axis]
+        by_axis[axis] = {
+            "count": len(rows),
+            "numeric_median": _median([float(r.meta.get("numeric_tokens", 0)) for r in rows]),
+            "source_len_median": _median([float(r.meta.get("source_len", 0)) for r in rows]),
+            "n_units_median": _median([float(r.meta.get("n_units", 0)) for r in rows]),
+        }
+    return MetaProfile(by_axis=by_axis, overall_numeric_median=_median(all_numeric))
+
+
+def triage_with_judge(records, source_lookup, multi_judge, k_per_axis=20,
+                      confirm_below=0.5) -> dict[str, float]:
+    """Re-score up to k representative failures per axis; return the confirm rate.
+
+    A failure is *confirmed* when the judge's corresponding axis also scores it
+    bad (score < confirm_below). Axes with no judge analog (copy_penalty) are
+    trusted from lexical evidence (confirm rate 1.0). Returns {} if no judge.
+    """
+    if multi_judge is None:
+        return {}
+    out: dict[str, float] = {}
+    axes = {r.axis for r in records}
+    for axis in axes:
+        judge_axis = _REWARD_TO_JUDGE.get(axis)
+        if judge_axis is None:
+            out[axis] = 1.0
+            continue
+        sample = [r for r in records if r.axis == axis][:k_per_axis]
+        confirmed = 0
+        scored = 0
+        for r in sample:
+            source = (source_lookup or {}).get(r.example_id)
+            if source is None:
+                continue
+            v = multi_judge.score_axes(source, r.summary)
+            if not v or judge_axis not in v:
+                continue
+            scored += 1
+            if v[judge_axis] < confirm_below:
+                confirmed += 1
+        out[axis] = (confirmed / scored) if scored else 0.0
+    return out
+
+
+@dataclass
+class DiagnosisReport:
+    weak_axes: list[str]
+    backbone_limited: list[str]
+    rates: dict[str, float]
+    meta_stats: MetaProfile
+    confirmed: dict[str, float]
+    candidates: list[str]
+
+    def converged(self, min_rate: float = 0.15) -> bool:
+        """True when every axis's failure rate is below `min_rate`."""
+        return all(r < min_rate for r in self.rates.values())
+
+
+@dataclass
+class HeldoutReport:
+    """Mean per-(judge)-axis score over the 30-scenario held-out set."""
+
+    axis_scores: dict[str, float]
+
+    def regressed(self, prev: "HeldoutReport | None", margin: float = 0.05) -> bool:
+        """True if any axis dropped by more than `margin` vs the previous round."""
+        if prev is None:
+            return False
+        for axis, now in self.axis_scores.items():
+            before = prev.axis_scores.get(axis)
+            if before is not None and (before - now) > margin:
+                return True
+        return False
+
+
+class WeaknessDiagnoser:
+    """Confirm weak axes from the windowed failure log under three gates."""
+
+    def __init__(self, min_rate: float = 0.15, consecutive: int = 2,
+                 min_confirm: float = 0.5, k_per_axis: int = 20):
+        self.min_rate = min_rate
+        self.consecutive = consecutive
+        self.min_confirm = min_confirm
+        self.k_per_axis = k_per_axis
+
+    def diagnose(self, records, total_rollouts, *, source_lookup=None,
+                 multi_judge=None, history=None, raw_axis_rates=None) -> DiagnosisReport:
+        history = history or []
+        rates = axis_failure_rates(records, total_rollouts)
+        meta_stats = failure_meta_profile(records)
+        candidates = [a for a, r in rates.items() if r >= self.min_rate]
+        confirmed = triage_with_judge(records, source_lookup, multi_judge,
+                                       k_per_axis=self.k_per_axis)
+
+        weak: list[str] = []
+        for axis in candidates:
+            if not self._consecutive_ok(axis, history):
+                continue
+            if confirmed and confirmed.get(axis, 0.0) < self.min_confirm:
+                continue
+            weak.append(axis)
+
+        # RAW ceiling: if the frozen base fails the axis too, no amount of policy
+        # training / synthetic data can fix it -> exclude from synthesis targets.
+        backbone_limited: list[str] = []
+        if raw_axis_rates:
+            kept = []
+            for axis in weak:
+                if raw_axis_rates.get(axis, 0.0) >= self.min_rate:
+                    backbone_limited.append(axis)
+                else:
+                    kept.append(axis)
+            weak = kept
+
+        return DiagnosisReport(
+            weak_axes=weak, backbone_limited=backbone_limited, rates=rates,
+            meta_stats=meta_stats, confirmed=confirmed, candidates=candidates,
+        )
+
+    def _consecutive_ok(self, axis: str, history: list) -> bool:
+        need = self.consecutive - 1
+        if need <= 0:
+            return True
+        recent = history[-need:]
+        if len(recent) < need:
+            return False
+        return all(axis in getattr(rep, "candidates", []) for rep in recent)
+
+
+def breakdown_failures(bd: RewardBreakdown, thresholds: dict[str, float]) -> set[str]:
+    """The set of axes this breakdown fails, with penalty-axis sign handling.
+
+    Reused to compute RAW-base per-axis failure rates for the RAW-ceiling gate.
+    """
+    return {axis for axis, thr in thresholds.items()
+            if _is_failure(axis, float(getattr(bd, axis)), thr)}
+
+
+def eval_heldout(summarizer, examples, multi_judge) -> "HeldoutReport":
+    """Summarize each held-out example and average the judge's per-axis scores.
+
+    Used both to cross-check that a weak axis is genuinely weak (not just a
+    training-data artifact) and to detect round-over-round regression.
+    """
+    from .judge import AXES as _JUDGE_AXES
+
+    sums: dict[str, float] = {a: 0.0 for a in _JUDGE_AXES}
+    counts: dict[str, int] = {a: 0 for a in _JUDGE_AXES}
+    for ex in examples:
+        res = summarizer.summarize(ex.source, query=ex.query, triplets=ex.triplets)
+        scores = multi_judge.score_axes(ex.source, res.text)
+        if not scores:
+            continue
+        for axis, val in scores.items():
+            if axis in sums:
+                sums[axis] += val
+                counts[axis] += 1
+    axis_scores = {a: (sums[a] / counts[a]) for a in _JUDGE_AXES if counts[a] > 0}
+    return HeldoutReport(axis_scores=axis_scores)
+
+
 def load_window(path: str, window_steps: int, now: int) -> list[FailureRecord]:
     """Load failure records with `step >= now - window_steps` (inclusive)."""
     import os
