@@ -3,7 +3,7 @@ name = "summarize-rl"
 version = "0.1.0"
 description = "PMI-weight RL for military-domain summarization: learn only the PMI combination weights [a,b,c,d] on a frozen LLM via reference-free SCST."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 license = { text = "MIT" }
 dependencies = [
     "torch>=2.1",
