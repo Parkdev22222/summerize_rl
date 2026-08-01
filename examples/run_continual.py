@@ -23,13 +23,13 @@ import os
 
 import torch
 
-from summarize_rl.branches import Example, Triplet
 from summarize_rl.grpo import GRPOTrainer
 from summarize_rl.infer import Summarizer
 from summarize_rl.judge import MultiAxisJudge
 from summarize_rl.policy import WeightPolicy
 from summarize_rl.rewards import compute_reward
 from summarize_rl.weakness import (
+    DiagnosisReport,
     HeldoutReport,
     WeaknessDiagnoser,
     breakdown_failures,
@@ -44,18 +44,9 @@ from data.gen_weakness_scenarios import (
     synthesis_params_from,
 )
 
-
-def record_to_example(rec: dict) -> Example:
-    """A synthetic-scenario JSONL record -> Example (carrying id/keyfacts/split)."""
-    triplets = [Triplet(*t) for t in rec.get("triplets", []) if len(t) == 3]
-    rid = rec.get("id")
-    return Example(
-        source=rec.get("source_text") or "",
-        triplets=triplets,
-        id=None if rid is None else str(rid),
-        keyfacts=list(rec.get("keyfacts") or []),
-        meta={"split": rec.get("split")},
-    )
+# Re-exported: the single JSONL-record -> Example mapping (also used by
+# train_real.load_corpus), so synthetic-round examples carry identical provenance.
+from examples.train_real import record_to_example  # noqa: E402
 
 
 def merge_datasets(base: list, synth_pool: list, ratio: float) -> list:
@@ -96,25 +87,10 @@ def _save_state(out_dir: str, round_k: int, history: list, synth_ratio: float) -
     state = {
         "round": round_k,
         "synth_ratio": synth_ratio,
-        "history": [
-            {"weak_axes": r.weak_axes, "backbone_limited": r.backbone_limited,
-             "candidates": r.candidates, "rates": r.rates}
-            for r in history
-        ],
+        "history": [r.to_dict() for r in history],
     }
     with open(os.path.join(out_dir, "state.json"), "w", encoding="utf-8") as fh:
         json.dump(state, fh, ensure_ascii=False, indent=2)
-
-
-class _PriorRound:
-    """Restored past round: exposes `.candidates` for the consecutive-round rule
-    and the other saved fields so state.json can be re-serialized on resume."""
-
-    def __init__(self, weak_axes, backbone_limited, candidates, rates):
-        self.weak_axes = weak_axes
-        self.backbone_limited = backbone_limited
-        self.candidates = candidates
-        self.rates = rates
 
 
 def _load_state(out_dir: str):
@@ -123,11 +99,7 @@ def _load_state(out_dir: str):
         return 0, [], None
     with open(path, encoding="utf-8") as fh:
         state = json.load(fh)
-    history = [
-        _PriorRound(r.get("weak_axes", []), r.get("backbone_limited", []),
-                    r.get("candidates", []), r.get("rates", {}))
-        for r in state.get("history", [])
-    ]
+    history = [DiagnosisReport.from_dict(r) for r in state.get("history", [])]
     return state.get("round", 0), history, state.get("synth_ratio")
 
 
@@ -161,6 +133,13 @@ def run_continual(*, trainer, summarizer, base_examples, heldout_examples,
     prev_heldout: HeldoutReport | None = None
     rps = _rollouts_per_step(trainer)
 
+    # RAW baseline rates depend only on the frozen backbone + fixed examples, so
+    # the RAW ceiling is computed once and reused across rounds.
+    raw_rates = (
+        raw_failure_rates(summarizer, base_examples[:raw_sample], thresholds, config)
+        if raw_ceiling and raw_sample else None
+    )
+
     for k in range(start_round, rounds + 1):
         # 1) train this round (FailureLog accumulates per rollout)
         for s in range(steps_per_round):
@@ -178,10 +157,6 @@ def run_continual(*, trainer, summarizer, base_examples, heldout_examples,
         # 2) diagnose the window
         records = load_window(fail_path, steps_per_round, now) if fail_path else []
         source_lookup = {ex.id: ex.source for ex in dataset if ex.id is not None}
-        raw_rates = (
-            raw_failure_rates(summarizer, base_examples[:raw_sample], thresholds, config)
-            if raw_ceiling and raw_sample else None
-        )
         report = diagnoser.diagnose(
             records, total_rollouts, source_lookup=source_lookup,
             multi_judge=multi_judge, history=history, raw_axis_rates=raw_rates,

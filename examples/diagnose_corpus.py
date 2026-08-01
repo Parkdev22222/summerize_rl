@@ -17,11 +17,7 @@ from __future__ import annotations
 
 import argparse
 
-from summarize_rl.weakness import (
-    WeaknessDiagnoser,
-    axis_failure_rates,
-    load_window,
-)
+from summarize_rl.weakness import WeaknessDiagnoser, load_window
 
 
 def main() -> None:
@@ -38,20 +34,19 @@ def main() -> None:
                    help="consecutive-round rule (1 for a one-shot diagnosis)")
     args = p.parse_args()
 
-    now = args.now
-    if now is None:
-        all_recs = load_window(args.failure_log, window_steps=10**9, now=10**9)
-        now = max((r.step for r in all_recs), default=0)
-
-    records = load_window(args.failure_log, window_steps=args.window_steps, now=now)
-    rates = axis_failure_rates(records, args.total_rollouts)
+    # Load the whole log once; derive `now` from it when unset, then window
+    # in memory (no second file read/parse).
+    all_recs = load_window(args.failure_log, window_steps=10**9, now=10**9)
+    now = args.now if args.now is not None else max((r.step for r in all_recs), default=0)
+    lo = now - args.window_steps
+    records = [r for r in all_recs if r.step >= lo]
 
     diag = WeaknessDiagnoser(min_rate=args.min_rate, consecutive=args.consecutive)
     report = diag.diagnose(records, args.total_rollouts, history=[])
 
     print(f"failures in window: {len(records)}  total rollouts: {args.total_rollouts}")
     print("per-axis failure rate:")
-    for axis, r in sorted(rates.items(), key=lambda kv: -kv[1]):
+    for axis, r in sorted(report.rates.items(), key=lambda kv: -kv[1]):
         mark = "  <-- candidate" if r >= args.min_rate else ""
         print(f"  {axis:>14}: {r:.3f}{mark}")
     print(f"candidates (>= {args.min_rate}): {report.candidates}")

@@ -60,6 +60,21 @@ def test_penalty_axes_membership():
     assert "key_sentence" not in DEFAULT_THRESHOLDS
 
 
+def test_reward_axis_vocabularies_are_valid_breakdown_fields():
+    # The threshold / judge-mapping / synthesis-knob dicts must all key off real
+    # RewardBreakdown fields, so a renamed axis can't silently drop out of the loop.
+    from dataclasses import fields
+    from summarize_rl.rewards import RewardBreakdown
+    from summarize_rl.weakness import PENALTY_AXES, _REWARD_TO_JUDGE
+    from data.gen_weakness_scenarios import AXIS_KNOBS
+
+    valid = {f.name for f in fields(RewardBreakdown)}
+    assert set(DEFAULT_THRESHOLDS) <= valid
+    assert set(_REWARD_TO_JUDGE) <= valid
+    assert set(AXIS_KNOBS) <= valid
+    assert PENALTY_AXES <= valid
+
+
 def test_jsonl_roundtrip_preserves_fields(tmp_path):
     p = str(tmp_path / "f.jsonl")
     log = FailureLog(p, thresholds={"coverage": 0.4})

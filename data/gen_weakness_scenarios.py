@@ -87,10 +87,6 @@ def synthesis_budget(report, train_size: int, ratio: float = 0.25,
     return max(round(ratio * train_size), min_per_axis * n_axes)
 
 
-def _grounded(phrase: str, source_norm: str) -> bool:
-    return _contains(source_norm, phrase)
-
-
 def triplets_grounded(rec: dict) -> bool:
     """Every triplet's tail (the stated fact) must appear in the source.
 
@@ -100,9 +96,7 @@ def triplets_grounded(rec: dict) -> bool:
     """
     source_norm = rec["source_text"].lower()
     for t in rec["triplets"]:
-        if len(t) != 3:
-            return False
-        if not _grounded(t[2], source_norm):
+        if len(t) != 3 or not _contains(source_norm, t[2]):
             return False
     return True
 
@@ -189,8 +183,14 @@ def entity_overlap(rec: dict, train_names: set[str]) -> float:
 
 
 def generate(n: int, axes: list[str], round_k: int, seed: int = 4242,
-             params: dict | None = None) -> list[dict]:
-    """Generate `n` unique weak-axis scenarios for the given axes."""
+             params: dict | None = None, train_names: set[str] | None = None,
+             overlap_cap: float = 0.3) -> list[dict]:
+    """Generate `n` unique weak-axis scenarios for the given axes.
+
+    When `train_names` is given, records whose entity overlap with the training
+    set exceeds `overlap_cap` are rejected (diversity guard against the policy
+    overfitting to repeated template entities). Records are always self-grounded.
+    """
     if params is None:
         params = default_params()
         for axis in axes:
@@ -204,6 +204,8 @@ def generate(n: int, axes: list[str], round_k: int, seed: int = 4242,
         rec = make_weakness_scenario(rng, seq, params, round_k)
         sig = rec["source_text"][:500]
         if sig in seen or not triplets_grounded(rec):
+            continue
+        if train_names and entity_overlap(rec, train_names) > overlap_cap:
             continue
         seen.add(sig)
         out.append(rec)

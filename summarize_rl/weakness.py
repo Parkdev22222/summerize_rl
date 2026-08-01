@@ -15,6 +15,7 @@ bad. `FailureLog` flips the comparison for the penalty axes accordingly.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 
 from .branches import Example
@@ -103,25 +104,28 @@ class FailureLog:
         self.thresholds = dict(thresholds) if thresholds is not None else dict(DEFAULT_THRESHOLDS)
         self._counts: dict[str, int] = {}
         self._total_rollouts = 0
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
     def record(self, step: int, example: Example, rollout_text: str,
                bd: RewardBreakdown) -> None:
         self._total_rollouts += 1
-        meta = None
+        failing = []
         for axis, thr in self.thresholds.items():
             val = float(getattr(bd, axis))
             if _is_failure(axis, val, thr):
                 self._counts[axis] = self._counts.get(axis, 0) + 1
-                if meta is None:
-                    meta = extract_meta(example)
-                self._append(FailureRecord(
-                    step=step,
-                    example_id="" if example.id is None else str(example.id),
-                    axis=axis,
-                    score=val,
-                    summary=rollout_text,
-                    meta=meta,
-                ))
+                failing.append((axis, val))
+        if not failing:
+            return
+        # One extract_meta + one file open per failing rollout (not per axis):
+        # keeps the per-rollout training hook near-zero-overhead.
+        meta = extract_meta(example)
+        ex_id = "" if example.id is None else str(example.id)
+        self._append([
+            FailureRecord(step=step, example_id=ex_id, axis=axis, score=val,
+                          summary=rollout_text, meta=meta)
+            for axis, val in failing
+        ])
 
     def failure_rates(self) -> dict[str, float]:
         n = max(1, self._total_rollouts)
@@ -131,11 +135,10 @@ class FailureLog:
         """Failure rates keyed for `TensorBoardLogger.log_scalars`."""
         return {f"weakness/fail_rate_{a}": v for a, v in self.failure_rates().items()}
 
-    def _append(self, rec: FailureRecord) -> None:
-        import os
-        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+    def _append(self, recs: list[FailureRecord]) -> None:
         with open(self.path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(asdict(rec), ensure_ascii=False) + "\n")
+            for rec in recs:
+                fh.write(json.dumps(asdict(rec), ensure_ascii=False) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +252,21 @@ class DiagnosisReport:
         """True when every axis's failure rate is below `min_rate`."""
         return all(r < min_rate for r in self.rates.values())
 
+    def to_dict(self) -> dict:
+        """Persistable view (drops the derived meta_stats/confirmed objects)."""
+        return {"weak_axes": self.weak_axes, "backbone_limited": self.backbone_limited,
+                "candidates": self.candidates, "rates": self.rates}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "DiagnosisReport":
+        """Restore a report from state.json. meta_stats/confirmed aren't persisted
+        (the resume path only needs candidates for the consecutive-round rule)."""
+        return cls(
+            weak_axes=d.get("weak_axes", []), backbone_limited=d.get("backbone_limited", []),
+            rates=d.get("rates", {}), meta_stats=MetaProfile(by_axis={}, overall_numeric_median=0.0),
+            confirmed={}, candidates=d.get("candidates", []),
+        )
+
 
 @dataclass
 class HeldoutReport:
@@ -318,7 +336,7 @@ class WeaknessDiagnoser:
         recent = history[-need:]
         if len(recent) < need:
             return False
-        return all(axis in getattr(rep, "candidates", []) for rep in recent)
+        return all(axis in rep.candidates for rep in recent)
 
 
 def breakdown_failures(bd: RewardBreakdown, thresholds: dict[str, float]) -> set[str]:
@@ -355,7 +373,6 @@ def eval_heldout(summarizer, examples, multi_judge) -> "HeldoutReport":
 
 def load_window(path: str, window_steps: int, now: int) -> list[FailureRecord]:
     """Load failure records with `step >= now - window_steps` (inclusive)."""
-    import os
     if not os.path.exists(path):
         return []
     lo = now - window_steps

@@ -41,6 +41,27 @@ from summarize_rl.train import SCSTTrainer
 from summarize_rl.weakness import FailureLog, default_thresholds
 
 
+def record_to_example(rec: dict, query: str | None = None) -> Example:
+    """Map one corpus/synthetic JSONL record to an Example, carrying provenance.
+
+    Single source of truth for the record -> Example contract (id/keyfacts/split),
+    reused by load_corpus and the continual-RL orchestrator so base-corpus and
+    synthetic-round examples always agree on how metadata is attached.
+    """
+    triplets = [Triplet(*t) for t in rec.get("triplets", []) if len(t) == 3]
+    rid = rec.get("id")
+    kwargs = {
+        "source": rec.get("source_text") or "",
+        "triplets": triplets,
+        "id": None if rid is None else str(rid),
+        "keyfacts": list(rec.get("keyfacts") or []),
+        "meta": {"split": rec.get("split")},
+    }
+    if query:
+        kwargs["query"] = query
+    return Example(**kwargs)
+
+
 def load_corpus(path: str, query: str | None, limit: int | None) -> list[Example]:
     """Read a JSONL corpus of {source_text, triplets:[[h,r,t],...]} into Examples."""
     if not os.path.exists(path):
@@ -54,20 +75,7 @@ def load_corpus(path: str, query: str | None, limit: int | None) -> list[Example
             line = line.strip()
             if not line:
                 continue
-            rec = json.loads(line)
-            src = rec.get("source_text") or ""
-            triplets = [Triplet(*t) for t in rec.get("triplets", []) if len(t) == 3]
-            rid = rec.get("id")
-            kwargs = {
-                "source": src,
-                "triplets": triplets,
-                "id": None if rid is None else str(rid),
-                "keyfacts": list(rec.get("keyfacts") or []),
-                "meta": {"split": rec.get("split")},
-            }
-            if query:
-                kwargs["query"] = query
-            examples.append(Example(**kwargs))
+            examples.append(record_to_example(json.loads(line), query))
             if limit and len(examples) >= limit:
                 break
     if not examples:
