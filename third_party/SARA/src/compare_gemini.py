@@ -32,6 +32,7 @@ import argparse
 import copy
 import json
 import os
+import random
 import re
 import time
 
@@ -79,16 +80,55 @@ def make_gemini(api_key, model_name, temperature=0.0, seed=42):
     return call
 
 
-def _retry(fn, retries=3, label="gemini"):
-    for attempt in range(retries):
+# Retry policy. 503(과부하)/429(레이트리밋)/500/타임아웃 등은 Gemini 서버의 일시적
+# 상태라 재시도하면 대부분 성공한다 -> 사실상 "될 때까지" 끈질기게 재시도(_TRANSIENT_MAX).
+# 반대로 JSON 파싱 실패 같은 비-일시적 오류는 몇 번만 재시도(_PARSE_MAX)하고 포기한다.
+_TRANSIENT_MAX = 60      # 503 등 일시적 오류: 사실상 응답 올 때까지 (capped backoff)
+_PARSE_MAX = 6           # 파싱 불가 등 비-일시적 오류
+_BACKOFF_CAP = 30.0      # 지수 백오프 상한(초)
+
+# 일시적(재시도하면 풀리는) 오류 신호 -- 예외 문자열/상태코드로 판별.
+_TRANSIENT_SIGNS = (
+    "503", "500", "502", "504", "429",
+    "overloaded", "unavailable", "rate limit", "ratelimit",
+    "resource exhausted", "deadline", "timeout", "timed out",
+    "temporarily", "try again", "internal error", "service unavailable",
+)
+
+
+def _is_transient(err):
+    """True if ``err`` looks like a retry-until-it-works server hiccup (503 등)."""
+    msg = str(err).lower()
+    return any(sign in msg for sign in _TRANSIENT_SIGNS)
+
+
+def _backoff(attempt):
+    """Exponential backoff with jitter, capped, so persistent retries don't hammer."""
+    base = min(_BACKOFF_CAP, 2.0 ** min(attempt, 8))
+    return base * (0.5 + random.random())      # 0.5x~1.5x jitter
+
+
+def _retry(fn, retries=_PARSE_MAX, label="gemini"):
+    """Call ``fn`` with retries. Transient server errors (503/429/timeout ...) retry
+    up to ``_TRANSIENT_MAX`` times -- effectively until a proper response arrives --
+    while non-transient errors give up after ``retries`` attempts. Returns None only
+    after exhausting retries."""
+    attempt = 0
+    while True:
         try:
             return fn()
-        except Exception as e:  # transient API / rate errors -> backoff
-            if attempt == retries - 1:
+        except Exception as e:
+            transient = _is_transient(e)
+            cap = _TRANSIENT_MAX if transient else retries
+            if attempt >= cap - 1:
                 print(f"   [{label} 오류] {e}")
                 return None
-            time.sleep(2 * (attempt + 1))
-    return None
+            delay = _backoff(attempt)
+            if transient:
+                print(f"   [{label} 재시도 {attempt + 1}/{cap}] 일시적 오류, "
+                      f"{delay:.1f}s 후 재시도: {str(e)[:120]}")
+            time.sleep(delay)
+            attempt += 1
 
 
 # -- per-dimension scoring judge ----------------------------------------------
@@ -173,8 +213,11 @@ def _parse_dim_scores(text):
     return out
 
 
-def score_summary(call, source, summary, retries=3):
-    """Score one summary on the three dimensions (1-5) + their average, or None."""
+def score_summary(call, source, summary, retries=_PARSE_MAX):
+    """Score one summary on the three dimensions (1-5) + their average, or None.
+
+    Transient API errors (503 등) are retried until they clear (see ``_retry``);
+    only a genuinely unparseable response after ``retries`` attempts yields None."""
     if not summary or not summary.strip():
         return {"accuracy": 1.0, "coverage": 1.0, "brevity": 1.0, "avg": 1.0}
     def _do():
