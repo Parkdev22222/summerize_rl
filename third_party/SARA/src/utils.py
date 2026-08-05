@@ -172,12 +172,27 @@ class ExtendedModel(nn.Module):
         
         return 
 
+# Backbones that should receive SARA's model-agnostic SAD head (3-branch
+# context-aware decoding). load_exaone_sad() works for any of these; extend this
+# tuple to add more families. Override per-run with --sad_backbone / --no_sad_backbone.
+_SAD_BACKBONE_KEYS = ("exaone", "llama", "qwen")
+
+
+def _sad_backbone(model_name_or_path, args=None):
+    """True if this backbone should be loaded with the SAD head attached."""
+    name = str(model_name_or_path).lower()
+    return any(k in name for k in _SAD_BACKBONE_KEYS)
+
+
 def configure_model_loading(args):
     # TODO: add AWQ and GPTQ models
 
-    # EXAONE 3.5 Instruct is not in the fork's model zoo; load it via its own
-    # remote architecture and attach SARA's context-aware SAD head at runtime.
-    if 'exaone' in args.model_name_or_path.lower():
+    # Attach SARA's model-agnostic SAD head for every supported causal-LM backbone.
+    # load_exaone_sad() is generic (AutoModelForCausalLM + add_sad_head): despite the
+    # name it works for EXAONE, Llama, Qwen, ... any *ForCausalLM. Without this branch,
+    # non-EXAONE models fall through to a plain AutoModelForCausalLM with NO SAD head,
+    # so the SARA method (3-branch context-aware decoding) would not actually run.
+    if _sad_backbone(args.model_name_or_path):
         from modeling_exaone_sad import load_exaone_sad
         return load_exaone_sad(args)
 
@@ -257,8 +272,9 @@ def configure_model_loading(args):
 def configure_model_loading_sft(args):
     # TODO: add AWQ and GPTQ models
 
-    # EXAONE 3.5 Instruct: load via remote architecture + attach the SAD head.
-    if 'exaone' in args.model_name_or_path.lower():
+    # Same as configure_model_loading: attach the generic SAD head for every
+    # supported backbone (EXAONE / Llama / Qwen / ...), not just EXAONE.
+    if _sad_backbone(args.model_name_or_path):
         from modeling_exaone_sad import load_exaone_sad
         return load_exaone_sad(args)
 
