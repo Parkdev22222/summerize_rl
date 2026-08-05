@@ -558,6 +558,10 @@ if __name__ == "__main__":
     parser.add_argument("--dropout_rate", type=float, default=0.0)
     parser.add_argument("--warmup_step", type=float, default=100)
     parser.add_argument("--warmup_train_step", type=float, default=2000)
+    parser.add_argument("--max_train_iters", type=int, default=0,
+                        help="hard cap on the number of actual training updates (본 학습 횟수). "
+                             "accumulation_steps=1 이면 옵티마이저 업데이트 수와 같다. "
+                             "0 = 제한 없음(기존 동작). 예: 120 -> 딱 120번만 학습하고 종료.")
     parser.add_argument("--accumulation_steps", type=int, default=1)
     parser.add_argument("--random_train_set", action="store_true", help='whether shuffle train set')
     parser.add_argument("--scheduler_type", type=str, default="linear", help='linear or cosine')
@@ -897,6 +901,17 @@ if __name__ == "__main__":
         else:
             print("[judge] off (judge_weight=0). Set --judge_weight > 0 to enable the EXAONE judge.")
 
+        # Hard cap on the number of *actual* training updates (본 학습 횟수).
+        # accumulation_steps=1 이면 iteration 1증가 = 옵티마이저 업데이트 1번이므로
+        # iteration 이 이 값에 도달하면 안/밖 루프를 모두 빠져나와 정확히 그 횟수만 학습한다.
+        # --max_train_iters 0(기본) = 제한 없음 -> 기존처럼 warmup_train_step 로만 멈춤.
+        train_step_cap = args.warmup_train_step
+        if getattr(args, "max_train_iters", 0) and args.max_train_iters > 0:
+            train_step_cap = min(train_step_cap, args.max_train_iters)
+        logger.info("train step cap = %d (max_train_iters=%s, warmup_train_step=%d)",
+                    train_step_cap, getattr(args, "max_train_iters", 0), args.warmup_train_step)
+        print("[train] 본 학습 스텝 상한 = {} 번".format(train_step_cap))
+
         for epoch_i in range(args.epoch_num):
             # predictions, references, documents = [], [], []
             start = time.time()
@@ -1203,9 +1218,16 @@ if __name__ == "__main__":
                         save_checkpoint(args, model, infos, optimizer, append=str(iteration))
                 # break
 
-                if iteration >= args.warmup_train_step:
+                if iteration >= train_step_cap:
                     break
-        
+
+            # 다음 epoch 로 넘어가 batch 0 을 한 번 더 학습하는 걸 막는다:
+            # 상한에 도달했으면 epoch 루프까지 즉시 종료 -> 정확히 train_step_cap 번만 학습.
+            if iteration >= train_step_cap:
+                logger.info("reached train step cap (%d) -> stop training", train_step_cap)
+                print("[train] 상한 {} 번 도달 -> 학습 종료".format(train_step_cap))
+                break
+
         del model
 
 
