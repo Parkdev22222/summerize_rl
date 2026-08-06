@@ -378,7 +378,7 @@ def main():
         source = split_row[0]  # full raw 원문
         gold = split_row[1]
 
-        row, meta = prepare_example(split_row, tokenizer, args)
+        row, meta = prepare_example(split_row, tokenizer, args, model)
         mine, _ = generate_summary(model, tokenizer, gen_cfg, row, args, device)
         base, _ = generate_summary(model, tokenizer, base_cfg, row, args, device, pure=True)
 

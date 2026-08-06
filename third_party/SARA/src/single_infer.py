@@ -60,6 +60,13 @@ def add_model_decode_args(p):
                    help="main-branch input: 원문만 / 원문+triplet / triplet만. "
                         "keyfacts(presumm) branch is unchanged; drop it with "
                         "--ablation_presumm_sequence.")
+    # When the mode needs triplets but the example has none, pull them from the
+    # source with the backbone LLM (frozen). Enabled by default; off = old fallback
+    # (document+triplets -> document only; triplets -> error).
+    p.add_argument("--no_triplet_extract", action="store_true",
+                   help="triplet이 없을 때 백본으로 원문에서 자동 추출하지 않음(기존 폴백 동작 유지)")
+    p.add_argument("--triplet_extract_max_new_tokens", type=int, default=256,
+                   help="백본으로 triplet 자동 추출 시 생성 최대 토큰 수")
     # checkpoint (FC weights only)
     p.add_argument("--save_checkpoint_path", required=True,
                    help="dir where training wrote model-*_fc_layers.pth")
@@ -156,16 +163,32 @@ def build_gen_config(args, tokenizer):
     )
 
 
-def prepare_example(split_row, tokenizer, args):
+def prepare_example(split_row, tokenizer, args, model=None):
     """Build the branch-list row + display meta for one dataset row.
 
     Mirrors the training/eval pipeline (truncate -> template) and applies
     --input_mode to the main branch's [보고서] slot. Returns (row, meta) where
     ``row`` = [templated_input, summary, presumm(keyfacts), triplets] and ``meta``
     carries raw_source / triplet_text / templated_input / reference / truncation.
-    """
+
+    ``model`` (optional): when given and --input_mode needs triplets that the
+    example lacks, the backbone extracts them from the source (see
+    reward_extras.extract_triplets_with_model)."""
     raw_source = split_row[0]
     triplets_raw = split_row[3] if len(split_row) > 3 else []
+
+    # Raw document with no KB triplets but the mode needs them -> have the backbone
+    # extract [head|relation|tail] facts from the source (frozen, greedy, no SAD head).
+    triplets_extracted = False
+    needs_triplets = args.input_mode in ("document+triplets", "triplets")
+    if (needs_triplets and not render_triplets(triplets_raw).strip()
+            and model is not None and not getattr(args, "no_triplet_extract", False)):
+        from reward_extras import extract_triplets_with_model
+        triplets_raw = extract_triplets_with_model(
+            model, tokenizer, raw_source,
+            max_new_tokens=getattr(args, "triplet_extract_max_new_tokens", 256))
+        triplets_extracted = bool(triplets_raw)
+
     triplet_text = render_triplets(triplets_raw)
 
     row = pretokenize([split_row], tokenizer, args.max_input_length)[0]
@@ -177,11 +200,15 @@ def prepare_example(split_row, tokenizer, args):
     except ValueError as e:
         raise SystemExit(str(e))
 
-    row = [template_input_decoder([doc_slot, *row[1:]], args.dataset)] + list(row[1:])
+    tail = list(row[1:])
+    if len(tail) >= 3:            # carry resolved (possibly extracted) triplets downstream
+        tail[2] = triplets_raw
+    row = [template_input_decoder([doc_slot, *row[1:]], args.dataset)] + tail
     doc_in_input = args.input_mode in ("document", "document+triplets")
     meta = {
         "raw_source": raw_source,
         "triplet_text": triplet_text,
+        "triplets_extracted": triplets_extracted,
         "templated_input": row[0],
         "reference": row[1],
         "source_was_truncated": doc_in_input and truncated_source.strip() != raw_source.strip(),
@@ -281,9 +308,9 @@ def main():
         )
 
     tokenizer = load_tokenizer(args)
-    row, meta = prepare_example(split[args.index], tokenizer, args)
+    model = load_model(args)                         # load first so triplet extraction can use it
+    row, meta = prepare_example(split[args.index], tokenizer, args, model)
 
-    model = load_model(args)
     gen_cfg = build_gen_config(args, tokenizer)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     prediction, n_out = generate_summary(model, tokenizer, gen_cfg, row, args, device)
@@ -298,7 +325,8 @@ def main():
     trunc = " — TRUNCATED to --max_input_length" if meta["source_was_truncated"] else ""
     print(f"\n[SOURCE] (원문 원본{trunc})\n{meta['raw_source']}")
     fed = "in main input" if args.input_mode != "document" else "NOT fed to model"
-    print(f"\n[TRIPLETS] ({fed})\n{meta['triplet_text'] or '(none)'}")
+    src_note = " — 백본이 원문에서 자동 추출" if meta.get("triplets_extracted") else ""
+    print(f"\n[TRIPLETS] ({fed}{src_note})\n{meta['triplet_text'] or '(none)'}")
     print(f"\n[INPUT] (모델에 실제로 들어간 프롬프트)\n{meta['templated_input']}")
     print(f"\n[GOLD]\n{meta['reference']}")
     cap = " — HIT --max_new_tokens cap, likely cut off; raise it" if hit_cap else ""

@@ -130,6 +130,102 @@ def main_input_slot(document: str, triplets_raw: object, input_mode: str) -> str
 
 
 # --------------------------------------------------------------------------- #
+# On-the-fly triplet extraction with the backbone LLM                          #
+#   For raw documents that have NO KB triplets: when --input_mode needs        #
+#   triplets, ask the (frozen) backbone to pull [head|relation|tail] facts     #
+#   from the source so document+triplets / triplets modes still work.          #
+# --------------------------------------------------------------------------- #
+
+def triplet_extract_prompt(document: str) -> str:
+    """Korean prompt telling the backbone to extract KB triplets from a report.
+
+    Emphasizes the facts this domain cares about (units, weapon systems + their
+    quantities, troop counts, casualties) and fixes a strict 'head | relation |
+    tail' line format so the output is machine-parseable."""
+    return (
+        "당신은 군사 보고서에서 지식 트리플을 추출하는 도구다. 아래 [원문]에서 '검증 가능한 "
+        "사실'을 '개체 | 관계 | 값' 형식의 트리플로 빠짐없이 뽑아라. 특히 각 부대가 보유한 "
+        "무기체계와 그 수량, 총 병력, 부상자·사망자 등 수치가 딸린 사실을 반드시 포함하라.\n"
+        "규칙: (1) 한 줄에 트리플 하나. (2) '개체 | 관계 | 값' 형식만 쓰고 다른 설명·머리말은 "
+        "쓰지 마라. (3) 원문에 없는 내용을 지어내지 마라. (4) 수량은 원문 그대로(단위 포함) 적어라.\n"
+        "예)\n"
+        "제3기계화보병대대 | 보유 | 대전차미사일 5기\n"
+        "제3기계화보병대대 | 병력 | 1,200명\n\n"
+        f"[원문]\n{document}\n\n[트리플]\n"
+    )
+
+
+def _parse_extracted_triplets(text, max_triplets: int = 30) -> list:
+    """Parse 'head | relation | tail' lines into ``[[head, relation, tail], ...]``.
+
+    Tolerant of list bullets and of a tail that itself contains '|'. Dedupes and
+    caps at ``max_triplets``. Returns [] when nothing parseable is found."""
+    out, seen = [], set()
+    for line in (text or "").splitlines():
+        line = line.strip().lstrip("-•*· ").strip()
+        if line.count("|") < 2:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        head, rel = parts[0], parts[1]
+        tail = "|".join(parts[2:]).strip()  # keep tails that contain '|'
+        if not head or not tail:
+            continue
+        key = (head, rel, tail)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append([head, rel, tail])
+        if len(out) >= max_triplets:
+            break
+    return out
+
+
+def extract_triplets_with_model(model, tokenizer, document: str,
+                                max_new_tokens: int = 256) -> list:
+    """Extract KB triplets from ``document`` using the loaded backbone (frozen).
+
+    Runs a plain single-branch greedy decode (no presumm/null, so the SAD/FC head
+    is not involved) under ``torch.no_grad`` -- the extraction reflects the base
+    model, never touches the RL graph, and works for any backbone (EXAONE/Llama/
+    Qwen). Returns ``[[head, relation, tail], ...]`` ([] on empty/failed extract)."""
+    if not document or not document.strip():
+        return []
+    import torch
+    from types import SimpleNamespace
+
+    prompt = triplet_extract_prompt(document)
+    # Prefer the model's chat template (instruction-tuned backbones).
+    try:
+        text_in = tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            add_generation_prompt=True, tokenize=False,
+        )
+    except Exception:  # no chat template -> raw prompt
+        text_in = prompt
+    enc = tokenizer(text_in, return_tensors="pt", truncation=True, max_length=1800)
+    dev = next(model.parameters()).device
+    input_ids = enc.input_ids.to(dev)
+    attn = enc.attention_mask.to(dev)
+    gc = SimpleNamespace(
+        do_sample=False, top_k=0, top_p=1.0, temperature=1.0,
+        min_new_tokens=1, max_new_tokens=max_new_tokens,
+        eos_token_id=tokenizer.eos_token_id, pad_token_id=tokenizer.pad_token_id,
+    )
+    try:
+        with torch.no_grad():
+            out = model.generate(
+                input_ids=input_ids, attention_mask=attn,
+                generation_config=gc, return_dict_in_generate=True,
+            )
+        gen = out.sequences[:, input_ids.shape[1]:]
+        text_out = tokenizer.decode(gen[0], skip_special_tokens=True)
+    except Exception as e:  # noqa: BLE001 - extraction must not crash inference
+        print("[triplet-extract] 실패(빈 트리플로 진행): {}: {}".format(type(e).__name__, e))
+        return []
+    return _parse_extracted_triplets(text_out)
+
+
+# --------------------------------------------------------------------------- #
 # 1. Triplet coverage (from summarize_rl/rewards.py: triplet_coverage)          #
 # --------------------------------------------------------------------------- #
 
