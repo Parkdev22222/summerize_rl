@@ -271,3 +271,36 @@ python -m pytest tests/ -q
 
 실제 백본 선정/다운로드, 실제 코퍼스·용어사전 구축, vLLM 롤아웃 통합, 대규모 학습 실행.
 설계 문서: `docs/superpowers/specs/2026-07-22-pmi-weight-rl-design.md`.
+
+## 알려진 한계 · 추후 작업 (TODO)
+
+### 한국어 ROUGE 보상이 한글을 버린다 (torchmetrics 기본 토크나이저)
+
+`third_party/SARA/src/eval.py:calculate_rouge` 는 `torchmetrics.functional.text.rouge.rouge_score`
+를 **커스텀 tokenizer/normalizer 없이** 호출한다. torchmetrics 기본 정규화는
+`re.sub(r"[^a-z0-9]+", " ", text.lower())` 라서 **한글 음절(가–힣)을 전부 제거**한다.
+
+예:
+```
+입력 : "제3기보대대는 대전차미사일 5기를 보유한다"
+토큰 : ['3', '5']          # 한글 전부 사라지고 숫자만 남음
+```
+
+결과적으로 현재 한국어 ROUGE-1/2/Lsum 보상은 사실상 **숫자·영문 토큰의 겹침만** 측정하며,
+한글 단어 겹침은 반영되지 않는다. 함의:
+
+- `RougeL_reward_weight` 의 실제 기여는 "한글 내용 유사도"가 아니라 "수량/숫자 일치"에 가깝다.
+  (우연히 수량 정확성과 방향이 맞지만 설계된 동작은 아님.)
+- best 체크포인트 선택 지표 `added_results = rouge1 + rouge2 + rougeLsum + w·factkb` 도
+  같은 한글-누락 ROUGE 기반이라, 한글 표현 개선이 체크포인트 선택에 잘 반영되지 않을 수 있다.
+- 현재 한글 요약 품질은 주로 `triplet_coverage`(엔티티 포함)와 LLM judge(의미·O/X 정확성)가
+  담당하고 있다.
+
+**추후 작업**: `calculate_rouge` 에 한글을 살리는 토크나이저를 넘긴다.
+- 간단(어절): `normalizer=lambda t: re.sub(r"[^0-9a-z가-힣]+"," ",t.lower())`
+  → 한글 어절이 토큰이 됨. 단 조사가 붙어 "대대"≠"대대는".
+- 정확(형태소): `konlpy`/`mecab` 형태소 분석기를 `tokenizer=` 로 넘겨 조사에 둔감한
+  진짜 한국어 ROUGE 계산.
+
+현재는 학습이 정상 동작하므로(triplet+judge 보상이 한글 품질을 견인) 우선순위는 낮게 두고
+추후 개선 항목으로 남긴다.
