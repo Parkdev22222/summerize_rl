@@ -1,0 +1,311 @@
+2026-08-06 13:34:34,281 - my_logger - INFO - model_name_or_path -> LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct
+2026-08-06 13:34:34,281 - my_logger - INFO - awq -> False
+2026-08-06 13:34:34,282 - my_logger - INFO - flash_attention -> False
+2026-08-06 13:34:34,283 - my_logger - INFO - dataset -> summarize_rl_ko
+2026-08-06 13:34:34,284 - my_logger - INFO - data_type -> len10_notriblock
+2026-08-06 13:34:34,284 - my_logger - INFO - input_mode -> document
+2026-08-06 13:34:34,285 - my_logger - INFO - num_samples -> 100000
+2026-08-06 13:34:34,286 - my_logger - INFO - max_input_length -> 1800
+2026-08-06 13:34:34,286 - my_logger - INFO - loading_mode -> bf16
+2026-08-06 13:34:34,287 - my_logger - INFO - device -> cuda:0
+2026-08-06 13:34:34,287 - my_logger - INFO - min_new_tokens -> 30
+2026-08-06 13:34:34,288 - my_logger - INFO - max_new_tokens -> 200
+2026-08-06 13:34:34,288 - my_logger - INFO - do_sample -> True
+2026-08-06 13:34:34,289 - my_logger - INFO - sample_top_k -> 50
+2026-08-06 13:34:34,289 - my_logger - INFO - sample_top_p -> 0.9
+2026-08-06 13:34:34,290 - my_logger - INFO - baseline_top_k -> 50
+2026-08-06 13:34:34,291 - my_logger - INFO - baseline_top_p -> 0.9
+2026-08-06 13:34:34,291 - my_logger - INFO - test_top_k -> 50
+2026-08-06 13:34:34,292 - my_logger - INFO - test_top_p -> 0.9
+2026-08-06 13:34:34,292 - my_logger - INFO - repetition_penalty -> 1.0
+2026-08-06 13:34:34,293 - my_logger - INFO - context_aware_decoding_alpha -> 1.0
+2026-08-06 13:34:34,293 - my_logger - INFO - cad_full -> 1.0
+2026-08-06 13:34:34,294 - my_logger - INFO - cad_salience -> 0.0
+2026-08-06 13:34:34,294 - my_logger - INFO - num_beams -> 1
+2026-08-06 13:34:34,295 - my_logger - INFO - sample_num_beams -> 1
+2026-08-06 13:34:34,296 - my_logger - INFO - temperature -> 1.0
+2026-08-06 13:34:34,296 - my_logger - INFO - batch_size -> 2
+2026-08-06 13:34:34,297 - my_logger - INFO - test_batch_size -> 8
+2026-08-06 13:34:34,297 - my_logger - INFO - save_output -> False
+2026-08-06 13:34:34,298 - my_logger - INFO - output_fname -> 
+2026-08-06 13:34:34,298 - my_logger - INFO - epoch_num -> 286
+2026-08-06 13:34:34,299 - my_logger - INFO - losses_log_every -> 25
+2026-08-06 13:34:34,299 - my_logger - INFO - save_checkpoint_every -> 10
+2026-08-06 13:34:34,299 - my_logger - INFO - save_checkpoint_path -> ../checkpoints/ablation/fcnone
+2026-08-06 13:34:34,311 - my_logger - INFO - load_checkpoint_path -> None
+2026-08-06 13:34:34,312 - my_logger - INFO - load_best -> 1
+2026-08-06 13:34:34,313 - my_logger - INFO - load_ckpt_num -> None
+2026-08-06 13:34:34,313 - my_logger - INFO - id -> abl_fcnone
+2026-08-06 13:34:34,314 - my_logger - INFO - save_history_ckpt -> 0
+2026-08-06 13:34:34,314 - my_logger - INFO - start_from -> model_output
+2026-08-06 13:34:34,316 - my_logger - INFO - lr -> 5e-05
+2026-08-06 13:34:34,316 - my_logger - INFO - num_return_sequences -> 2
+2026-08-06 13:34:34,317 - my_logger - INFO - alpha_et_hidden_size -> 4096
+2026-08-06 13:34:34,317 - my_logger - INFO - random_seed -> 42
+2026-08-06 13:34:34,318 - my_logger - INFO - RougeL_reward_weight -> 1.0
+2026-08-06 13:34:34,318 - my_logger - INFO - Rouge1_reward_weight -> 0.0
+2026-08-06 13:34:34,319 - my_logger - INFO - Rouge2_reward_weight -> 0.0
+2026-08-06 13:34:34,319 - my_logger - INFO - factkb_weight -> 0.0
+2026-08-06 13:34:34,320 - my_logger - INFO - triplet_coverage_weight -> 1.0
+2026-08-06 13:34:34,321 - my_logger - INFO - judge_weight -> 0.3
+2026-08-06 13:34:34,321 - my_logger - INFO - judge_max_new_tokens -> 384
+2026-08-06 13:34:34,322 - my_logger - INFO - max_grad_norm -> 1.0
+2026-08-06 13:34:34,323 - my_logger - INFO - debug_flag -> False
+2026-08-06 13:34:34,323 - my_logger - INFO - debug_num -> 5
+2026-08-06 13:34:34,324 - my_logger - INFO - use_log_softmax -> False
+2026-08-06 13:34:34,324 - my_logger - INFO - dropout_rate -> 0.0
+2026-08-06 13:34:34,325 - my_logger - INFO - warmup_step -> 200.0
+2026-08-06 13:34:34,326 - my_logger - INFO - warmup_train_step -> 20000.0
+2026-08-06 13:34:34,326 - my_logger - INFO - max_train_iters -> 120
+2026-08-06 13:34:34,327 - my_logger - INFO - accumulation_steps -> 1
+2026-08-06 13:34:34,327 - my_logger - INFO - random_train_set -> False
+2026-08-06 13:34:34,328 - my_logger - INFO - scheduler_type -> linear
+2026-08-06 13:34:34,328 - my_logger - INFO - do_train -> True
+2026-08-06 13:34:34,329 - my_logger - INFO - do_test -> False
+2026-08-06 13:34:34,329 - my_logger - INFO - test_all -> False
+2026-08-06 13:34:34,330 - my_logger - INFO - save_every_log_step -> False
+2026-08-06 13:34:34,331 - my_logger - INFO - sqrt_dimension -> 1
+2026-08-06 13:34:34,331 - my_logger - INFO - sqrt_dimension_first -> 1
+2026-08-06 13:34:34,332 - my_logger - INFO - sqrt_dimension_second -> 1
+2026-08-06 13:34:34,332 - my_logger - INFO - sqrt_method -> concate_dim
+2026-08-06 13:34:34,332 - my_logger - INFO - my_fc_fp32 -> True
+2026-08-06 13:34:34,333 - my_logger - INFO - fc_init -> none
+2026-08-06 13:34:34,333 - my_logger - INFO - ablation_main_sequence -> False
+2026-08-06 13:34:34,334 - my_logger - INFO - ablation_presumm_sequence -> False
+2026-08-06 13:34:34,334 - my_logger - INFO - ablation_null_sequence -> False
+2026-08-06 13:34:34,335 - my_logger - INFO - test_factkb_weight -> 1.0
+2026-08-06 13:34:34,336 - my_logger - INFO - logging -> ../logs/ablation/train_fcnone.log
+2026-08-06 13:34:34,336 - my_logger - INFO - tensorboard_logdir -> ../runs/ablation/fcnone
+2026-08-06 13:34:34,337 - my_logger - INFO - reward_ema_beta -> 0.98
+2026-08-06 13:34:34,337 - my_logger - INFO - gemini_val_n -> 0
+2026-08-06 13:34:34,338 - my_logger - INFO - gemini_val_every -> 1
+2026-08-06 13:34:34,338 - my_logger - INFO - gemini_val_model -> gemini-3.5-flash
+2026-08-06 13:34:34,338 - my_logger - INFO - gemini_val_accuracy_weight -> 2.0
+2026-08-06 13:34:34,339 - my_logger - INFO - 
+
+2026-08-06 13:35:51,134 - my_logger - INFO - using device: cuda:0 (cuda available=True)
+2026-08-06 13:35:51,141 - my_logger - INFO - prepare training set
+2026-08-06 13:35:51,142 - my_logger - INFO - start training!
+2026-08-06 13:35:52,525 - my_logger - INFO - TensorBoard logging to /workspace/summerize_rl/third_party/SARA/runs/ablation/fcnone
+2026-08-06 13:35:52,526 - my_logger - INFO - LLM-as-judge enabled via local backbone (max_new_tokens=384)
+2026-08-06 13:35:52,527 - my_logger - INFO - train step cap = 120 (max_train_iters=120, warmup_train_step=20000)
+2026-08-06 13:37:26,567 - my_logger - INFO - first sample 0-th topk rougeL F: 0.750, topk rouge1 F: 0.750, topk rouge2 F: 0.545, Factkb_scores: 0.000
+2026-08-06 13:37:26,568 - my_logger - INFO - first sample 1-th topk rougeL F: 0.571, topk rouge1 F: 0.571, topk rouge2 F: 0.526, Factkb_scores: 0.000
+2026-08-06 13:37:26,569 - my_logger - INFO - avg topk rougeL F: 0.661, topk rouge1 F: 0.661, topk rouge2 F: 0.536, Factkb_scores: 0.000
+2026-08-06 13:37:26,570 - my_logger - INFO - first sample greedy rougeL F: 0.714, greedy rouge1 F: 0.857, greedy rouge2 F: 0.385, greedy factkb: 0.000
+2026-08-06 13:37:26,579 - my_logger - INFO - iter 0 (epoch 0),  loss = 0.058, time/batch = 94.052
+2026-08-06 13:38:57,046 - my_logger - INFO - first sample 0-th topk rougeL F: 0.541, topk rouge1 F: 0.541, topk rouge2 F: 0.229, Factkb_scores: 0.000
+2026-08-06 13:38:57,048 - my_logger - INFO - first sample 1-th topk rougeL F: 0.564, topk rouge1 F: 0.564, topk rouge2 F: 0.270, Factkb_scores: 0.000
+2026-08-06 13:38:57,049 - my_logger - INFO - avg topk rougeL F: 0.552, topk rouge1 F: 0.552, topk rouge2 F: 0.249, Factkb_scores: 0.000
+2026-08-06 13:38:57,049 - my_logger - INFO - first sample greedy rougeL F: 0.564, greedy rouge1 F: 0.564, greedy rouge2 F: 0.270, greedy factkb: 0.000
+2026-08-06 13:38:57,054 - my_logger - INFO - iter 1 (epoch 0),  loss = -0.018, time/batch = 184.527
+2026-08-06 13:40:27,713 - my_logger - INFO - first sample 0-th topk rougeL F: 0.545, topk rouge1 F: 0.764, topk rouge2 F: 0.151, Factkb_scores: 0.000
+2026-08-06 13:40:27,715 - my_logger - INFO - first sample 1-th topk rougeL F: 0.593, topk rouge1 F: 0.778, topk rouge2 F: 0.192, Factkb_scores: 0.000
+2026-08-06 13:40:27,716 - my_logger - INFO - avg topk rougeL F: 0.569, topk rouge1 F: 0.771, topk rouge2 F: 0.172, Factkb_scores: 0.000
+2026-08-06 13:40:27,716 - my_logger - INFO - first sample greedy rougeL F: 0.519, greedy rouge1 F: 0.741, greedy rouge2 F: 0.115, greedy factkb: 0.000
+2026-08-06 13:40:27,721 - my_logger - INFO - iter 2 (epoch 0),  loss = -0.033, time/batch = 275.194
+2026-08-06 13:41:57,855 - my_logger - INFO - first sample 0-th topk rougeL F: 0.692, topk rouge1 F: 0.692, topk rouge2 F: 0.500, Factkb_scores: 0.000
+2026-08-06 13:41:57,856 - my_logger - INFO - first sample 1-th topk rougeL F: 0.636, topk rouge1 F: 0.636, topk rouge2 F: 0.300, Factkb_scores: 0.000
+2026-08-06 13:41:57,857 - my_logger - INFO - avg topk rougeL F: 0.664, topk rouge1 F: 0.664, topk rouge2 F: 0.400, Factkb_scores: 0.000
+2026-08-06 13:41:57,857 - my_logger - INFO - first sample greedy rougeL F: 0.583, greedy rouge1 F: 0.583, greedy rouge2 F: 0.091, greedy factkb: 0.000
+2026-08-06 13:41:57,861 - my_logger - INFO - iter 3 (epoch 0),  loss = -0.058, time/batch = 365.334
+2026-08-06 13:43:27,852 - my_logger - INFO - first sample 0-th topk rougeL F: 0.730, topk rouge1 F: 0.730, topk rouge2 F: 0.492, Factkb_scores: 0.000
+2026-08-06 13:43:27,853 - my_logger - INFO - first sample 1-th topk rougeL F: 0.444, topk rouge1 F: 0.444, topk rouge2 F: 0.192, Factkb_scores: 0.000
+2026-08-06 13:43:27,854 - my_logger - INFO - avg topk rougeL F: 0.587, topk rouge1 F: 0.587, topk rouge2 F: 0.342, Factkb_scores: 0.000
+2026-08-06 13:43:27,855 - my_logger - INFO - first sample greedy rougeL F: 0.667, greedy rouge1 F: 0.667, greedy rouge2 F: 0.517, greedy factkb: 0.000
+2026-08-06 13:43:27,859 - my_logger - INFO - iter 4 (epoch 0),  loss = 0.078, time/batch = 455.332
+2026-08-06 13:44:58,476 - my_logger - INFO - first sample 0-th topk rougeL F: 0.524, topk rouge1 F: 0.524, topk rouge2 F: 0.150, Factkb_scores: 0.000
+2026-08-06 13:44:58,478 - my_logger - INFO - first sample 1-th topk rougeL F: 0.545, topk rouge1 F: 0.636, topk rouge2 F: 0.238, Factkb_scores: 0.000
+2026-08-06 13:44:58,478 - my_logger - INFO - avg topk rougeL F: 0.535, topk rouge1 F: 0.580, topk rouge2 F: 0.194, Factkb_scores: 0.000
+2026-08-06 13:44:58,479 - my_logger - INFO - first sample greedy rougeL F: 0.340, greedy rouge1 F: 0.340, greedy rouge2 F: 0.089, greedy factkb: 0.000
+2026-08-06 13:44:58,483 - my_logger - INFO - iter 5 (epoch 0),  loss = -0.214, time/batch = 545.956
+2026-08-06 13:46:29,333 - my_logger - INFO - first sample 0-th topk rougeL F: 0.595, topk rouge1 F: 0.703, topk rouge2 F: 0.343, Factkb_scores: 0.000
+2026-08-06 13:46:29,334 - my_logger - INFO - first sample 1-th topk rougeL F: 0.500, topk rouge1 F: 0.500, topk rouge2 F: 0.235, Factkb_scores: 0.000
+2026-08-06 13:46:29,335 - my_logger - INFO - avg topk rougeL F: 0.547, topk rouge1 F: 0.601, topk rouge2 F: 0.289, Factkb_scores: 0.000
+2026-08-06 13:46:29,335 - my_logger - INFO - first sample greedy rougeL F: 0.438, greedy rouge1 F: 0.438, greedy rouge2 F: 0.200, greedy factkb: 0.000
+2026-08-06 13:46:29,340 - my_logger - INFO - iter 6 (epoch 0),  loss = -0.014, time/batch = 636.813
+2026-08-06 13:48:00,228 - my_logger - INFO - first sample 0-th topk rougeL F: 0.429, topk rouge1 F: 0.429, topk rouge2 F: 0.167, Factkb_scores: 0.000
+2026-08-06 13:48:00,230 - my_logger - INFO - first sample 1-th topk rougeL F: 0.667, topk rouge1 F: 0.667, topk rouge2 F: 0.154, Factkb_scores: 0.000
+2026-08-06 13:48:00,231 - my_logger - INFO - avg topk rougeL F: 0.548, topk rouge1 F: 0.548, topk rouge2 F: 0.160, Factkb_scores: 0.000
+2026-08-06 13:48:00,231 - my_logger - INFO - first sample greedy rougeL F: 0.625, greedy rouge1 F: 0.625, greedy rouge2 F: 0.429, greedy factkb: 0.000
+2026-08-06 13:48:00,235 - my_logger - INFO - iter 7 (epoch 0),  loss = 0.026, time/batch = 727.708
+2026-08-06 13:49:30,217 - my_logger - INFO - first sample 0-th topk rougeL F: 0.791, topk rouge1 F: 0.884, topk rouge2 F: 0.683, Factkb_scores: 0.000
+2026-08-06 13:49:30,218 - my_logger - INFO - first sample 1-th topk rougeL F: 0.357, topk rouge1 F: 0.357, topk rouge2 F: 0.077, Factkb_scores: 0.000
+2026-08-06 13:49:30,219 - my_logger - INFO - avg topk rougeL F: 0.574, topk rouge1 F: 0.620, topk rouge2 F: 0.380, Factkb_scores: 0.000
+2026-08-06 13:49:30,219 - my_logger - INFO - first sample greedy rougeL F: 0.800, greedy rouge1 F: 0.800, greedy rouge2 F: 0.684, greedy factkb: 0.000
+2026-08-06 13:49:30,224 - my_logger - INFO - iter 8 (epoch 0),  loss = 0.094, time/batch = 817.697
+2026-08-06 13:51:00,503 - my_logger - INFO - first sample 0-th topk rougeL F: 0.632, topk rouge1 F: 0.632, topk rouge2 F: 0.235, Factkb_scores: 0.000
+2026-08-06 13:51:00,512 - my_logger - INFO - first sample 1-th topk rougeL F: 0.600, topk rouge1 F: 0.600, topk rouge2 F: 0.222, Factkb_scores: 0.000
+2026-08-06 13:51:00,513 - my_logger - INFO - avg topk rougeL F: 0.616, topk rouge1 F: 0.616, topk rouge2 F: 0.229, Factkb_scores: 0.000
+2026-08-06 13:51:00,514 - my_logger - INFO - first sample greedy rougeL F: 0.824, greedy rouge1 F: 0.824, greedy rouge2 F: 0.400, greedy factkb: 0.000
+2026-08-06 13:51:00,517 - my_logger - INFO - iter 9 (epoch 0),  loss = 0.136, time/batch = 907.990
+2026-08-06 13:51:00,756 - my_logger - INFO - start decoding!
+2026-08-06 13:52:12,514 - my_logger - INFO - FactKB unavailable, skipping in validation: OSError: Repo id must be in the form 'repo_name' or 'namespace/repo_name': '../data/pretrained_models/roberta-base'. Use `repo_type` argument if needed.
+2026-08-06 13:52:12,516 - my_logger - INFO - rouge1_fmeasure -> 57.26
+2026-08-06 13:52:12,516 - my_logger - INFO - rouge1_precision -> 53.38
+2026-08-06 13:52:12,517 - my_logger - INFO - rouge1_recall -> 64.44
+2026-08-06 13:52:12,517 - my_logger - INFO - rouge2_fmeasure -> 31.98
+2026-08-06 13:52:12,518 - my_logger - INFO - rouge2_precision -> 29.52
+2026-08-06 13:52:12,518 - my_logger - INFO - rouge2_recall -> 37.39
+2026-08-06 13:52:12,518 - my_logger - INFO - rougeL_fmeasure -> 54.07
+2026-08-06 13:52:12,519 - my_logger - INFO - rougeL_precision -> 50.52
+2026-08-06 13:52:12,519 - my_logger - INFO - rougeL_recall -> 60.78
+2026-08-06 13:52:12,520 - my_logger - INFO - rougeLsum_fmeasure -> 56.65
+2026-08-06 13:52:12,521 - my_logger - INFO - rougeLsum_precision -> 52.82
+2026-08-06 13:52:12,521 - my_logger - INFO - rougeLsum_recall -> 63.78
+2026-08-06 13:52:12,522 - my_logger - INFO - 
+
+2026-08-06 13:52:12,523 - my_logger - INFO - evaluate added_results: 1.458880364894867
+2026-08-06 13:52:12,523 - my_logger - INFO - best_val_score: 1.458880364894867
+2026-08-06 13:52:13,510 - my_logger - INFO - model saved to ../checkpoints/ablation/fcnone/model_fc_layers.pth
+2026-08-06 13:52:15,877 - my_logger - INFO - model saved to ../checkpoints/ablation/fcnone/model-best_fc_layers.pth
+2026-08-06 13:53:48,524 - my_logger - INFO - first sample 0-th topk rougeL F: 0.514, topk rouge1 F: 0.514, topk rouge2 F: 0.303, Factkb_scores: 0.000
+2026-08-06 13:53:48,526 - my_logger - INFO - first sample 1-th topk rougeL F: 0.562, topk rouge1 F: 0.562, topk rouge2 F: 0.200, Factkb_scores: 0.000
+2026-08-06 13:53:48,527 - my_logger - INFO - avg topk rougeL F: 0.538, topk rouge1 F: 0.538, topk rouge2 F: 0.252, Factkb_scores: 0.000
+2026-08-06 13:53:48,527 - my_logger - INFO - first sample greedy rougeL F: 0.357, greedy rouge1 F: 0.357, greedy rouge2 F: 0.077, greedy factkb: 0.000
+2026-08-06 13:53:48,531 - my_logger - INFO - iter 10 (epoch 0),  loss = -0.086, time/batch = 1076.004
+2026-08-06 13:55:19,518 - my_logger - INFO - first sample 0-th topk rougeL F: 0.641, topk rouge1 F: 0.667, topk rouge2 F: 0.474, Factkb_scores: 0.000
+2026-08-06 13:55:19,519 - my_logger - INFO - first sample 1-th topk rougeL F: 0.576, topk rouge1 F: 0.576, topk rouge2 F: 0.219, Factkb_scores: 0.000
+2026-08-06 13:55:19,520 - my_logger - INFO - avg topk rougeL F: 0.608, topk rouge1 F: 0.621, topk rouge2 F: 0.346, Factkb_scores: 0.000
+2026-08-06 13:55:19,521 - my_logger - INFO - first sample greedy rougeL F: 0.720, greedy rouge1 F: 0.773, greedy rouge2 F: 0.712, greedy factkb: 0.000
+2026-08-06 13:55:19,525 - my_logger - INFO - iter 11 (epoch 0),  loss = 0.064, time/batch = 1166.998
+2026-08-06 13:56:50,543 - my_logger - INFO - first sample 0-th topk rougeL F: 0.562, topk rouge1 F: 0.562, topk rouge2 F: 0.400, Factkb_scores: 0.000
+2026-08-06 13:56:50,544 - my_logger - INFO - first sample 1-th topk rougeL F: 0.629, topk rouge1 F: 0.629, topk rouge2 F: 0.424, Factkb_scores: 0.000
+2026-08-06 13:56:50,546 - my_logger - INFO - avg topk rougeL F: 0.596, topk rouge1 F: 0.596, topk rouge2 F: 0.412, Factkb_scores: 0.000
+2026-08-06 13:56:50,546 - my_logger - INFO - first sample greedy rougeL F: 0.632, greedy rouge1 F: 0.632, greedy rouge2 F: 0.389, greedy factkb: 0.000
+2026-08-06 13:56:50,550 - my_logger - INFO - iter 12 (epoch 0),  loss = -0.014, time/batch = 1258.023
+2026-08-06 13:58:21,348 - my_logger - INFO - first sample 0-th topk rougeL F: 1.000, topk rouge1 F: 1.000, topk rouge2 F: 0.667, Factkb_scores: 0.000
+2026-08-06 13:58:21,349 - my_logger - INFO - first sample 1-th topk rougeL F: 0.733, topk rouge1 F: 0.733, topk rouge2 F: 0.500, Factkb_scores: 0.000
+2026-08-06 13:58:21,351 - my_logger - INFO - avg topk rougeL F: 0.867, topk rouge1 F: 0.867, topk rouge2 F: 0.583, Factkb_scores: 0.000
+2026-08-06 13:58:21,351 - my_logger - INFO - first sample greedy rougeL F: 0.696, greedy rouge1 F: 0.696, greedy rouge2 F: 0.381, greedy factkb: 0.000
+2026-08-06 13:58:21,356 - my_logger - INFO - iter 13 (epoch 0),  loss = -0.030, time/batch = 1348.829
+2026-08-06 13:59:51,972 - my_logger - INFO - first sample 0-th topk rougeL F: 0.588, topk rouge1 F: 0.588, topk rouge2 F: 0.133, Factkb_scores: 0.000
+2026-08-06 13:59:51,974 - my_logger - INFO - first sample 1-th topk rougeL F: 0.500, topk rouge1 F: 0.500, topk rouge2 F: 0.143, Factkb_scores: 0.000
+2026-08-06 13:59:51,975 - my_logger - INFO - avg topk rougeL F: 0.544, topk rouge1 F: 0.544, topk rouge2 F: 0.138, Factkb_scores: 0.000
+2026-08-06 13:59:51,975 - my_logger - INFO - first sample greedy rougeL F: 0.526, greedy rouge1 F: 0.632, greedy rouge2 F: 0.235, greedy factkb: 0.000
+2026-08-06 13:59:51,980 - my_logger - INFO - iter 14 (epoch 0),  loss = 0.023, time/batch = 1439.453
+2026-08-06 14:01:22,389 - my_logger - INFO - first sample 0-th topk rougeL F: 0.636, topk rouge1 F: 0.636, topk rouge2 F: 0.400, Factkb_scores: 0.000
+2026-08-06 14:01:22,390 - my_logger - INFO - first sample 1-th topk rougeL F: 0.783, topk rouge1 F: 0.957, topk rouge2 F: 0.476, Factkb_scores: 0.000
+2026-08-06 14:01:22,391 - my_logger - INFO - avg topk rougeL F: 0.709, topk rouge1 F: 0.796, topk rouge2 F: 0.438, Factkb_scores: 0.000
+2026-08-06 14:01:22,391 - my_logger - INFO - first sample greedy rougeL F: 0.800, greedy rouge1 F: 0.800, greedy rouge2 F: 0.556, greedy factkb: 0.000
+2026-08-06 14:01:22,395 - my_logger - INFO - iter 15 (epoch 0),  loss = -0.006, time/batch = 1529.868
+2026-08-06 14:02:52,321 - my_logger - INFO - first sample 0-th topk rougeL F: 0.778, topk rouge1 F: 0.778, topk rouge2 F: 0.500, Factkb_scores: 0.000
+2026-08-06 14:02:52,323 - my_logger - INFO - first sample 1-th topk rougeL F: 0.783, topk rouge1 F: 0.870, topk rouge2 F: 0.571, Factkb_scores: 0.000
+2026-08-06 14:02:52,323 - my_logger - INFO - avg topk rougeL F: 0.780, topk rouge1 F: 0.824, topk rouge2 F: 0.536, Factkb_scores: 0.000
+2026-08-06 14:02:52,324 - my_logger - INFO - first sample greedy rougeL F: 0.412, greedy rouge1 F: 0.412, greedy rouge2 F: 0.188, greedy factkb: 0.000
+2026-08-06 14:02:52,329 - my_logger - INFO - iter 16 (epoch 0),  loss = -0.135, time/batch = 1619.802
+2026-08-06 14:04:22,571 - my_logger - INFO - first sample 0-th topk rougeL F: 0.833, topk rouge1 F: 0.833, topk rouge2 F: 0.565, Factkb_scores: 0.000
+2026-08-06 14:04:22,572 - my_logger - INFO - first sample 1-th topk rougeL F: 0.513, topk rouge1 F: 0.564, topk rouge2 F: 0.162, Factkb_scores: 0.000
+2026-08-06 14:04:22,573 - my_logger - INFO - avg topk rougeL F: 0.673, topk rouge1 F: 0.699, topk rouge2 F: 0.364, Factkb_scores: 0.000
+2026-08-06 14:04:22,573 - my_logger - INFO - first sample greedy rougeL F: 0.816, greedy rouge1 F: 0.857, greedy rouge2 F: 0.596, greedy factkb: 0.000
+2026-08-06 14:04:22,578 - my_logger - INFO - iter 17 (epoch 0),  loss = 0.077, time/batch = 1710.050
+2026-08-06 14:05:53,675 - my_logger - INFO - first sample 0-th topk rougeL F: 0.769, topk rouge1 F: 0.769, topk rouge2 F: 0.541, Factkb_scores: 0.000
+2026-08-06 14:05:53,677 - my_logger - INFO - first sample 1-th topk rougeL F: 0.769, topk rouge1 F: 0.872, topk rouge2 F: 0.649, Factkb_scores: 0.000
+2026-08-06 14:05:53,678 - my_logger - INFO - avg topk rougeL F: 0.769, topk rouge1 F: 0.821, topk rouge2 F: 0.595, Factkb_scores: 0.000
+2026-08-06 14:05:53,678 - my_logger - INFO - first sample greedy rougeL F: 0.800, greedy rouge1 F: 0.800, greedy rouge2 F: 0.579, greedy factkb: 0.000
+2026-08-06 14:05:53,682 - my_logger - INFO - iter 18 (epoch 0),  loss = 0.020, time/batch = 1801.155
+2026-08-06 14:07:25,385 - my_logger - INFO - first sample 0-th topk rougeL F: 0.714, topk rouge1 F: 0.714, topk rouge2 F: 0.538, Factkb_scores: 0.000
+2026-08-06 14:07:25,386 - my_logger - INFO - first sample 1-th topk rougeL F: 0.741, topk rouge1 F: 0.741, topk rouge2 F: 0.560, Factkb_scores: 0.000
+2026-08-06 14:07:25,387 - my_logger - INFO - avg topk rougeL F: 0.728, topk rouge1 F: 0.728, topk rouge2 F: 0.549, Factkb_scores: 0.000
+2026-08-06 14:07:25,387 - my_logger - INFO - first sample greedy rougeL F: 0.692, greedy rouge1 F: 0.692, greedy rouge2 F: 0.583, greedy factkb: 0.000
+2026-08-06 14:07:25,392 - my_logger - INFO - iter 19 (epoch 0),  loss = -0.085, time/batch = 1892.864
+2026-08-06 14:07:25,632 - my_logger - INFO - start decoding!
+2026-08-06 14:08:37,838 - my_logger - INFO - FactKB unavailable, skipping in validation: OSError: Repo id must be in the form 'repo_name' or 'namespace/repo_name': '../data/pretrained_models/roberta-base'. Use `repo_type` argument if needed.
+2026-08-06 14:08:37,839 - my_logger - INFO - rouge1_fmeasure -> 66.31
+2026-08-06 14:08:37,839 - my_logger - INFO - rouge1_precision -> 59.82
+2026-08-06 14:08:37,841 - my_logger - INFO - rouge1_recall -> 76.39
+2026-08-06 14:08:37,841 - my_logger - INFO - rouge2_fmeasure -> 34.06
+2026-08-06 14:08:37,841 - my_logger - INFO - rouge2_precision -> 29.50
+2026-08-06 14:08:37,842 - my_logger - INFO - rouge2_recall -> 41.44
+2026-08-06 14:08:37,843 - my_logger - INFO - rougeL_fmeasure -> 61.49
+2026-08-06 14:08:37,843 - my_logger - INFO - rougeL_precision -> 55.34
+2026-08-06 14:08:37,843 - my_logger - INFO - rougeL_recall -> 70.94
+2026-08-06 14:08:37,844 - my_logger - INFO - rougeLsum_fmeasure -> 65.01
+2026-08-06 14:08:37,844 - my_logger - INFO - rougeLsum_precision -> 58.51
+2026-08-06 14:08:37,844 - my_logger - INFO - rougeLsum_recall -> 75.06
+2026-08-06 14:08:37,846 - my_logger - INFO - 
+
+2026-08-06 14:08:37,846 - my_logger - INFO - evaluate added_results: 1.6537842750549316
+2026-08-06 14:08:37,847 - my_logger - INFO - best_val_score: 1.6537842750549316
+2026-08-06 14:08:38,814 - my_logger - INFO - model saved to ../checkpoints/ablation/fcnone/model_fc_layers.pth
+2026-08-06 14:08:41,309 - my_logger - INFO - model saved to ../checkpoints/ablation/fcnone/model-best_fc_layers.pth
+2026-08-06 14:10:13,417 - my_logger - INFO - first sample 0-th topk rougeL F: 1.000, topk rouge1 F: 1.000, topk rouge2 F: 1.000, Factkb_scores: 0.000
+2026-08-06 14:10:13,419 - my_logger - INFO - first sample 1-th topk rougeL F: 0.833, topk rouge1 F: 0.833, topk rouge2 F: 0.545, Factkb_scores: 0.000
+2026-08-06 14:10:13,419 - my_logger - INFO - avg topk rougeL F: 0.917, topk rouge1 F: 0.917, topk rouge2 F: 0.773, Factkb_scores: 0.000
+2026-08-06 14:10:13,420 - my_logger - INFO - first sample greedy rougeL F: 0.417, greedy rouge1 F: 0.417, greedy rouge2 F: 0.273, greedy factkb: 0.000
+2026-08-06 14:10:13,425 - my_logger - INFO - iter 20 (epoch 0),  loss = -0.297, time/batch = 2060.898
+2026-08-06 14:11:44,075 - my_logger - INFO - first sample 0-th topk rougeL F: 0.683, topk rouge1 F: 0.683, topk rouge2 F: 0.359, Factkb_scores: 0.000
+2026-08-06 14:11:44,076 - my_logger - INFO - first sample 1-th topk rougeL F: 0.791, topk rouge1 F: 0.791, topk rouge2 F: 0.537, Factkb_scores: 0.000
+2026-08-06 14:11:44,077 - my_logger - INFO - avg topk rougeL F: 0.737, topk rouge1 F: 0.737, topk rouge2 F: 0.448, Factkb_scores: 0.000
+2026-08-06 14:11:44,077 - my_logger - INFO - first sample greedy rougeL F: 0.780, greedy rouge1 F: 0.780, greedy rouge2 F: 0.513, greedy factkb: 0.000
+2026-08-06 14:11:44,082 - my_logger - INFO - iter 21 (epoch 0),  loss = 0.083, time/batch = 2151.555
+2026-08-06 14:13:18,898 - my_logger - INFO - first sample 0-th topk rougeL F: 0.667, topk rouge1 F: 0.667, topk rouge2 F: 0.429, Factkb_scores: 0.000
+2026-08-06 14:13:18,900 - my_logger - INFO - first sample 1-th topk rougeL F: 0.788, topk rouge1 F: 0.788, topk rouge2 F: 0.516, Factkb_scores: 0.000
+2026-08-06 14:13:18,909 - my_logger - INFO - avg topk rougeL F: 0.727, topk rouge1 F: 0.727, topk rouge2 F: 0.472, Factkb_scores: 0.000
+2026-08-06 14:13:18,910 - my_logger - INFO - first sample greedy rougeL F: 0.710, greedy rouge1 F: 0.710, greedy rouge2 F: 0.414, greedy factkb: 0.000
+2026-08-06 14:13:18,915 - my_logger - INFO - iter 22 (epoch 0),  loss = 0.003, time/batch = 2246.387
+2026-08-06 14:14:49,822 - my_logger - INFO - first sample 0-th topk rougeL F: 0.500, topk rouge1 F: 0.500, topk rouge2 F: 0.333, Factkb_scores: 0.000
+2026-08-06 14:14:49,823 - my_logger - INFO - first sample 1-th topk rougeL F: 0.783, topk rouge1 F: 0.783, topk rouge2 F: 0.667, Factkb_scores: 0.000
+2026-08-06 14:14:49,824 - my_logger - INFO - avg topk rougeL F: 0.641, topk rouge1 F: 0.641, topk rouge2 F: 0.500, Factkb_scores: 0.000
+2026-08-06 14:14:49,826 - my_logger - INFO - first sample greedy rougeL F: 0.783, greedy rouge1 F: 0.783, greedy rouge2 F: 0.381, greedy factkb: 0.000
+2026-08-06 14:14:49,832 - my_logger - INFO - iter 23 (epoch 0),  loss = 0.251, time/batch = 2337.304
+2026-08-06 14:16:20,332 - my_logger - INFO - first sample 0-th topk rougeL F: 0.600, topk rouge1 F: 0.600, topk rouge2 F: 0.222, Factkb_scores: 0.000
+2026-08-06 14:16:20,333 - my_logger - INFO - first sample 1-th topk rougeL F: 0.600, topk rouge1 F: 0.600, topk rouge2 F: 0.222, Factkb_scores: 0.000
+2026-08-06 14:16:20,334 - my_logger - INFO - avg topk rougeL F: 0.600, topk rouge1 F: 0.600, topk rouge2 F: 0.222, Factkb_scores: 0.000
+2026-08-06 14:16:20,335 - my_logger - INFO - first sample greedy rougeL F: 0.667, greedy rouge1 F: 0.667, greedy rouge2 F: 0.316, greedy factkb: 0.000
+2026-08-06 14:16:20,339 - my_logger - INFO - iter 24 (epoch 0),  loss = -0.015, time/batch = 2427.812
+2026-08-06 14:16:20,604 - my_logger - INFO - loss_history: iteration: 25 loss: -0.01508723758161068
+2026-08-06 14:17:52,105 - my_logger - INFO - first sample 0-th topk rougeL F: 0.800, topk rouge1 F: 0.800, topk rouge2 F: 0.783, Factkb_scores: 0.000
+2026-08-06 14:17:52,112 - my_logger - INFO - first sample 1-th topk rougeL F: 0.769, topk rouge1 F: 0.846, topk rouge2 F: 0.333, Factkb_scores: 0.000
+2026-08-06 14:17:52,113 - my_logger - INFO - avg topk rougeL F: 0.785, topk rouge1 F: 0.823, topk rouge2 F: 0.558, Factkb_scores: 0.000
+2026-08-06 14:17:52,113 - my_logger - INFO - first sample greedy rougeL F: 0.846, greedy rouge1 F: 0.846, greedy rouge2 F: 0.500, greedy factkb: 0.000
+2026-08-06 14:17:52,117 - my_logger - INFO - iter 25 (epoch 0),  loss = -0.105, time/batch = 2519.590
+2026-08-06 14:19:23,195 - my_logger - INFO - first sample 0-th topk rougeL F: 0.645, topk rouge1 F: 0.645, topk rouge2 F: 0.483, Factkb_scores: 0.000
+2026-08-06 14:19:23,197 - my_logger - INFO - first sample 1-th topk rougeL F: 0.625, topk rouge1 F: 0.688, topk rouge2 F: 0.400, Factkb_scores: 0.000
+2026-08-06 14:19:23,197 - my_logger - INFO - avg topk rougeL F: 0.635, topk rouge1 F: 0.666, topk rouge2 F: 0.441, Factkb_scores: 0.000
+2026-08-06 14:19:23,198 - my_logger - INFO - first sample greedy rougeL F: 0.720, greedy rouge1 F: 0.720, greedy rouge2 F: 0.435, greedy factkb: 0.000
+2026-08-06 14:19:23,202 - my_logger - INFO - iter 26 (epoch 0),  loss = 0.029, time/batch = 2610.675
+2026-08-06 14:21:00,560 - my_logger - INFO - first sample 0-th topk rougeL F: 0.500, topk rouge1 F: 0.500, topk rouge2 F: 0.091, Factkb_scores: 0.000
+2026-08-06 14:21:00,562 - my_logger - INFO - first sample 1-th topk rougeL F: 0.467, topk rouge1 F: 0.733, topk rouge2 F: 0.286, Factkb_scores: 0.000
+2026-08-06 14:21:00,563 - my_logger - INFO - avg topk rougeL F: 0.483, topk rouge1 F: 0.617, topk rouge2 F: 0.188, Factkb_scores: 0.000
+2026-08-06 14:21:00,563 - my_logger - INFO - first sample greedy rougeL F: 0.733, greedy rouge1 F: 0.800, greedy rouge2 F: 0.357, greedy factkb: 0.000
+2026-08-06 14:21:00,568 - my_logger - INFO - iter 27 (epoch 0),  loss = -0.026, time/batch = 2708.041
+2026-08-06 14:22:35,417 - my_logger - INFO - first sample 0-th topk rougeL F: 0.160, topk rouge1 F: 0.160, topk rouge2 F: 0.000, Factkb_scores: 0.000
+2026-08-06 14:22:35,419 - my_logger - INFO - first sample 1-th topk rougeL F: 0.194, topk rouge1 F: 0.194, topk rouge2 F: 0.069, Factkb_scores: 0.000
+2026-08-06 14:22:35,419 - my_logger - INFO - avg topk rougeL F: 0.177, topk rouge1 F: 0.177, topk rouge2 F: 0.034, Factkb_scores: 0.000
+2026-08-06 14:22:35,420 - my_logger - INFO - first sample greedy rougeL F: 0.222, greedy rouge1 F: 0.222, greedy rouge2 F: 0.080, greedy factkb: 0.000
+2026-08-06 14:22:35,424 - my_logger - INFO - iter 28 (epoch 0),  loss = 0.004, time/batch = 2802.897
+2026-08-06 14:24:07,646 - my_logger - INFO - first sample 0-th topk rougeL F: 0.485, topk rouge1 F: 0.485, topk rouge2 F: 0.258, Factkb_scores: 0.000
+2026-08-06 14:24:07,648 - my_logger - INFO - first sample 1-th topk rougeL F: 0.485, topk rouge1 F: 0.485, topk rouge2 F: 0.194, Factkb_scores: 0.000
+2026-08-06 14:24:07,649 - my_logger - INFO - avg topk rougeL F: 0.485, topk rouge1 F: 0.485, topk rouge2 F: 0.226, Factkb_scores: 0.000
+2026-08-06 14:24:07,649 - my_logger - INFO - first sample greedy rougeL F: 0.485, greedy rouge1 F: 0.485, greedy rouge2 F: 0.323, greedy factkb: 0.000
+2026-08-06 14:24:07,654 - my_logger - INFO - iter 29 (epoch 0),  loss = -0.034, time/batch = 2895.127
+2026-08-06 14:24:07,896 - my_logger - INFO - start decoding!
+2026-08-06 14:25:20,589 - my_logger - INFO - FactKB unavailable, skipping in validation: OSError: Repo id must be in the form 'repo_name' or 'namespace/repo_name': '../data/pretrained_models/roberta-base'. Use `repo_type` argument if needed.
+2026-08-06 14:25:20,590 - my_logger - INFO - rouge1_fmeasure -> 62.92
+2026-08-06 14:25:20,591 - my_logger - INFO - rouge1_precision -> 54.57
+2026-08-06 14:25:20,591 - my_logger - INFO - rouge1_recall -> 77.00
+2026-08-06 14:25:20,592 - my_logger - INFO - rouge2_fmeasure -> 39.36
+2026-08-06 14:25:20,592 - my_logger - INFO - rouge2_precision -> 33.25
+2026-08-06 14:25:20,592 - my_logger - INFO - rouge2_recall -> 50.39
+2026-08-06 14:25:20,593 - my_logger - INFO - rougeL_fmeasure -> 61.09
+2026-08-06 14:25:20,593 - my_logger - INFO - rougeL_precision -> 52.98
+2026-08-06 14:25:20,594 - my_logger - INFO - rougeL_recall -> 74.78
+2026-08-06 14:25:20,594 - my_logger - INFO - rougeLsum_fmeasure -> 62.50
+2026-08-06 14:25:20,594 - my_logger - INFO - rougeLsum_precision -> 54.24
+2026-08-06 14:25:20,595 - my_logger - INFO - rougeLsum_recall -> 76.44
+2026-08-06 14:25:20,596 - my_logger - INFO - 
+
+2026-08-06 14:25:20,597 - my_logger - INFO - evaluate added_results: 1.6478769481182098
+2026-08-06 14:25:20,597 - my_logger - INFO - best_val_score: 1.6537842750549316
+2026-08-06 14:25:21,579 - my_logger - INFO - model saved to ../checkpoints/ablation/fcnone/model_fc_layers.pth
+2026-08-06 14:26:54,506 - my_logger - INFO - first sample 0-th topk rougeL F: 0.600, topk rouge1 F: 0.600, topk rouge2 F: 0.357, Factkb_scores: 0.000
+2026-08-06 14:26:54,509 - my_logger - INFO - first sample 1-th topk rougeL F: 0.645, topk rouge1 F: 0.645, topk rouge2 F: 0.414, Factkb_scores: 0.000
+2026-08-06 14:26:54,511 - my_logger - INFO - avg topk rougeL F: 0.623, topk rouge1 F: 0.623, topk rouge2 F: 0.385, Factkb_scores: 0.000
+2026-08-06 14:26:54,511 - my_logger - INFO - first sample greedy rougeL F: 0.688, greedy rouge1 F: 0.688, greedy rouge2 F: 0.467, greedy factkb: 0.000
+2026-08-06 14:26:54,515 - my_logger - INFO - iter 30 (epoch 0),  loss = 0.037, time/batch = 3061.988
+2026-08-06 14:28:27,858 - my_logger - INFO - first sample 0-th topk rougeL F: 0.514, topk rouge1 F: 0.629, topk rouge2 F: 0.182, Factkb_scores: 0.000
+2026-08-06 14:28:27,859 - my_logger - INFO - first sample 1-th topk rougeL F: 0.444, topk rouge1 F: 0.611, topk rouge2 F: 0.118, Factkb_scores: 0.000
+2026-08-06 14:28:27,861 - my_logger - INFO - avg topk rougeL F: 0.479, topk rouge1 F: 0.620, topk rouge2 F: 0.150, Factkb_scores: 0.000
+2026-08-06 14:28:27,861 - my_logger - INFO - first sample greedy rougeL F: 0.550, greedy rouge1 F: 0.700, greedy rouge2 F: 0.263, greedy factkb: 0.000
+2026-08-06 14:28:27,865 - my_logger - INFO - iter 31 (epoch 0),  loss = 0.034, time/batch = 3155.338
